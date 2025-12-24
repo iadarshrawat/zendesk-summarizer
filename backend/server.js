@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { ChromaClient } from "chromadb";
+import { Pinecone } from "@pinecone-database/pinecone";
 
 dotenv.config();
 
@@ -21,50 +21,91 @@ if (!process.env.GEMINI_API_KEY) {
   process.exit(1);
 }
 
+if (!process.env.PINECONE_API_KEY) {
+  console.error("❌ PINECONE_API_KEY missing");
+  console.error("💡 Sign up at https://www.pinecone.io to get your free API key");
+  process.exit(1);
+}
+
 /* ================= GEMINI ================= */
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-/* ================= CHROMA ================= */
+/* ================= PINECONE ================= */
 
-const COLLECTION_NAME = "zendesk_kb";
+const INDEX_NAME = "zendesk-kb";
 
-const chroma = new ChromaClient({
-  path: "http://localhost:8000",
+const pc = new Pinecone({
+  apiKey: process.env.PINECONE_API_KEY,
 });
 
-let collectionCache = null;
+let indexCache = null;
 
-async function initializeCollection() {
+async function initializeIndex() {
   try {
-    // Try to delete existing collection to start fresh
-    try {
-      await chroma.deleteCollection({ name: COLLECTION_NAME });
-      console.log("🗑️ Deleted old collection");
-    } catch (e) {
-      // Collection doesn't exist, that's fine
+    // List existing indexes
+    const indexList = await pc.listIndexes();
+    const indexExists = indexList.indexes?.some(idx => idx.name === INDEX_NAME);
+
+    if (!indexExists) {
+      console.log(`📦 Creating new index: ${INDEX_NAME}`);
+      console.log(`⏳ This may take 30-60 seconds...`);
+      
+      await pc.createIndex({
+        name: INDEX_NAME,
+        dimension: 768, // text-embedding-004 dimension
+        metric: "cosine",
+        spec: {
+          serverless: {
+            cloud: "aws",
+            region: "us-east-1", // Free tier region
+          },
+        },
+      });
+      
+      // Wait for index to be ready
+      console.log("⏳ Waiting for index to be ready...");
+      let ready = false;
+      let attempts = 0;
+      
+      while (!ready && attempts < 30) {
+        try {
+          const indexDesc = await pc.describeIndex(INDEX_NAME);
+          if (indexDesc.status?.ready) {
+            ready = true;
+          } else {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            attempts++;
+          }
+        } catch (e) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          attempts++;
+        }
+      }
+      
+      if (!ready) {
+        throw new Error("Index creation timeout. Please try again.");
+      }
+    } else {
+      console.log(`✅ Index already exists: ${INDEX_NAME}`);
     }
 
-    // Create new collection without any embedding function
-    const collection = await chroma.createCollection({
-      name: COLLECTION_NAME,
-      metadata: { source: "zendesk_kb" },
-    });
-
-    console.log("✅ Created fresh collection:", COLLECTION_NAME);
-    collectionCache = collection;
-    return collection;
+    const index = pc.index(INDEX_NAME);
+    indexCache = index;
+    console.log("✅ Index ready:", INDEX_NAME);
+    return index;
   } catch (err) {
-    console.error("❌ Failed to initialize collection:", err);
+    console.error("❌ Failed to initialize index:", err);
+    console.error("💡 Make sure your PINECONE_API_KEY is correct");
     throw err;
   }
 }
 
-async function getCollection() {
-  if (!collectionCache) {
-    collectionCache = await initializeCollection();
+async function getIndex() {
+  if (!indexCache) {
+    indexCache = await initializeIndex();
   }
-  return collectionCache;
+  return indexCache;
 }
 
 /* ================= EMBEDDING ================= */
@@ -185,21 +226,42 @@ app.post("/ingest-kb", async (req, res) => {
       return res.status(400).json({ error: "articles array required" });
     }
 
-    const collection = await getCollection();
-
-    for (const article of articles) {
-      const cleanText = article.content.replace(/<[^>]+>/g, "").slice(0, 2000);
-      const embedding = await embedText(cleanText);
-
-      await collection.add({
-        ids: [`article-${article.id}`],
-        documents: [cleanText],
-        metadatas: [{ title: article.title }],
-        embeddings: [embedding],
-      });
+    if (articles.length === 0) {
+      return res.status(400).json({ error: "articles array is empty" });
     }
 
-    console.log(`✅ Ingested ${articles.length} articles into Chroma`);
+    const index = await getIndex();
+
+    console.log(`📚 Processing ${articles.length} articles...`);
+
+    // Process in batches to avoid rate limits
+    const batchSize = 10;
+    let totalIngested = 0;
+
+    for (let i = 0; i < articles.length; i += batchSize) {
+      const batch = articles.slice(i, i + batchSize);
+      const vectors = [];
+
+      for (const article of batch) {
+        const cleanText = article.content.replace(/<[^>]+>/g, "").slice(0, 2000);
+        const embedding = await embedText(cleanText);
+
+        vectors.push({
+          id: `article-${article.id}`,
+          values: embedding,
+          metadata: {
+            title: article.title,
+            content: cleanText,
+          },
+        });
+      }
+
+      await index.upsert(vectors);
+      totalIngested += vectors.length;
+      console.log(`✅ Ingested ${totalIngested}/${articles.length} articles`);
+    }
+
+    console.log(`✅ Successfully ingested all ${articles.length} articles into Pinecone`);
     res.json({ status: "KB ingested successfully", count: articles.length });
   } catch (err) {
     console.error("❌ KB ingestion error:", err);
@@ -217,16 +279,20 @@ app.post("/compose-reply", async (req, res) => {
       return res.status(400).json({ error: "Invalid ticket payload - subject and description required" });
     }
 
-    const collection = await getCollection();
+    const index = await getIndex();
 
     const queryEmbedding = await embedText(`${ticket.subject} ${ticket.description}`);
 
-    const results = await collection.query({
-      queryEmbeddings: [queryEmbedding],
-      nResults: 3,
+    const results = await index.query({
+      vector: queryEmbedding,
+      topK: 3,
+      includeMetadata: true,
     });
 
-    const kbChunks = (results.documents?.[0] || []).join("\n\n") || "No relevant knowledge base found.";
+    const kbChunks = results.matches
+      .map(match => match.metadata?.content || "")
+      .filter(Boolean)
+      .join("\n\n") || "No relevant knowledge base found.";
 
     const prompt = buildReplyPrompt(ticket, ticket.tone || "professional", kbChunks);
 
@@ -238,6 +304,7 @@ app.post("/compose-reply", async (req, res) => {
     res.json({
       ticketId: ticket.ticketId,
       reply: response.response.text(),
+      sources: results.matches.map(m => m.metadata?.title).filter(Boolean),
     });
   } catch (err) {
     console.error("❌ RAG reply error:", err);
@@ -255,21 +322,23 @@ app.post("/debug-search", async (req, res) => {
       return res.status(400).json({ error: "query required" });
     }
 
-    const collection = await getCollection();
+    const index = await getIndex();
     const queryEmbedding = await embedText(query);
 
-    const results = await collection.query({
-      queryEmbeddings: [queryEmbedding],
-      nResults: 5,
+    const results = await index.query({
+      vector: queryEmbedding,
+      topK: 5,
+      includeMetadata: true,
     });
 
     res.json({
       query: query,
-      results: {
-        documents: results.documents?.[0] || [],
-        metadatas: results.metadatas?.[0] || [],
-        distances: results.distances?.[0] || [],
-      }
+      results: results.matches.map(match => ({
+        id: match.id,
+        score: match.score,
+        title: match.metadata?.title,
+        content: match.metadata?.content?.slice(0, 200) + "...",
+      })),
     });
   } catch (err) {
     console.error("❌ Debug search error:", err);
@@ -277,16 +346,33 @@ app.post("/debug-search", async (req, res) => {
   }
 });
 
+/* ================= GET INDEX STATS ================= */
+
+app.get("/index-stats", async (req, res) => {
+  try {
+    const index = await getIndex();
+    const stats = await index.describeIndexStats();
+    
+    res.json({
+      indexName: INDEX_NAME,
+      stats: stats,
+    });
+  } catch (err) {
+    console.error("❌ Stats error:", err);
+    res.status(500).json({ error: "Failed to get stats", details: err.message });
+  }
+});
+
 /* ================= RESET KB ================= */
 
 app.delete("/reset-kb", async (req, res) => {
   try {
-    await chroma.deleteCollection({ name: COLLECTION_NAME });
-    collectionCache = null;
-    console.log("🗑️ Deleted collection:", COLLECTION_NAME);
+    const index = await getIndex();
     
-    // Recreate
-    await initializeCollection();
+    // Delete all vectors
+    await index.deleteAll();
+    
+    console.log("🗑️ Deleted all vectors from index:", INDEX_NAME);
     
     res.json({ status: "KB reset successfully" });
   } catch (err) {
@@ -298,29 +384,40 @@ app.delete("/reset-kb", async (req, res) => {
 /* ================= HEALTH ================= */
 
 app.get("/health", (_, res) => {
-  res.json({ status: "ok" });
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 /* ================= START ================= */
 
 async function startServer() {
   try {
-    // Initialize collection on startup
-    await initializeCollection();
+    console.log("🚀 Starting server...");
+    console.log("🔧 Initializing Pinecone...");
+    
+    // Initialize index on startup
+    await initializeIndex();
     
     app.listen(PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
-      console.log(`📚 Collection "${COLLECTION_NAME}" ready`);
-      console.log(`\nAvailable endpoints:`);
-      console.log(`  POST /summarize - Summarize a ticket`);
-      console.log(`  POST /compose-reply - Generate RAG-based reply`);
-      console.log(`  POST /ingest-kb - Ingest knowledge base articles`);
-      console.log(`  POST /debug-search - Debug article search`);
-      console.log(`  DELETE /reset-kb - Reset knowledge base`);
-      console.log(`  GET /health - Health check`);
+      console.log(`\n✅ Server running successfully!`);
+      console.log(`🌐 URL: http://localhost:${PORT}`);
+      console.log(`📚 Index: "${INDEX_NAME}" ready`);
+      console.log(`🌲 Using Pinecone (Serverless)`);
+      console.log(`\n📍 Available endpoints:`);
+      console.log(`  POST   /summarize       - Summarize a ticket`);
+      console.log(`  POST   /compose-reply   - Generate RAG-based reply`);
+      console.log(`  POST   /ingest-kb       - Ingest knowledge base articles`);
+      console.log(`  POST   /debug-search    - Debug article search`);
+      console.log(`  GET    /index-stats     - Get index statistics`);
+      console.log(`  DELETE /reset-kb        - Reset knowledge base`);
+      console.log(`  GET    /health          - Health check`);
+      console.log(`\n💡 Tip: Test with: curl http://localhost:${PORT}/health\n`);
     });
   } catch (err) {
     console.error("❌ Failed to start server:", err);
+    console.error("\n💡 Troubleshooting:");
+    console.error("  1. Check your PINECONE_API_KEY in .env");
+    console.error("  2. Make sure you have signed up at https://www.pinecone.io");
+    console.error("  3. Verify npm install @pinecone-database/pinecone completed");
     process.exit(1);
   }
 }
