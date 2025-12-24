@@ -17,13 +17,13 @@ app.use(express.json());
 /* ================= VALIDATION ================= */
 
 if (!process.env.GEMINI_API_KEY) {
-  console.error("❌ GEMINI_API_KEY missing");
+  console.error("GEMINI_API_KEY missing");
   process.exit(1);
 }
 
 if (!process.env.PINECONE_API_KEY) {
-  console.error("❌ PINECONE_API_KEY missing");
-  console.error("💡 Sign up at https://www.pinecone.io to get your free API key");
+  console.error("PINECONE_API_KEY missing");
+  console.error("Sign up at https://www.pinecone.io to get your free API key");
   process.exit(1);
 }
 
@@ -87,12 +87,12 @@ async function initializeIndex() {
         throw new Error("Index creation timeout. Please try again.");
       }
     } else {
-      console.log(`✅ Index already exists: ${INDEX_NAME}`);
+      console.log(`Index already exists: ${INDEX_NAME}`);
     }
 
     const index = pc.index(INDEX_NAME);
     indexCache = index;
-    console.log("✅ Index ready:", INDEX_NAME);
+    console.log("Index ready:", INDEX_NAME);
     return index;
   } catch (err) {
     console.error("❌ Failed to initialize index:", err);
@@ -129,7 +129,7 @@ function buildSummaryPrompt(ticket) {
   return `
 You are an AI support assistant.
 
-Summarize the Zendesk ticket below.
+Summarize the Zendesk ticket below in ${ticket.language || "English"}.
 
 ------------------------
 Ticket ID: ${ticket.ticketId}
