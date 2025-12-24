@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Ticket Summarizer</title>
+  <script src="https://static.zdassets.com/zendesk_app_framework_sdk/2.0/zaf_sdk.min.js"></script>
+
+
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 13px;
+    }
+
+    h4 {
+      margin-bottom: 8px;
+    }
+
+    .tone-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .tone-pill {
+      border: 1px solid #d8dcde;
+      border-radius: 16px;
+      padding: 6px 12px;
+      cursor: pointer;
+      background: #f8f9f9;
+      user-select: none;
+    }
+
+    .tone-pill input {
+      display: none;
+    }
+
+    .tone-pill:has(input:checked) {
+      background: #1f73b7;
+      color: white;
+      border-color: #1f73b7;
+    }
+
+    .primary-btn {
+      background: #1f73b7;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 12px;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    .primary-btn:disabled {
+      background: #c2d4e8;
+      cursor: not-allowed;
+    }
+
+    .reply-container {
+      margin-top: 10px;
+    }
+
+    #replyBox {
+      background: #f8f9f9;
+      border: 1px solid #d8dcde;
+      border-radius: 4px;
+      padding: 8px;
+      min-height: 120px;
+      white-space: pre-wrap;
+    }
+
+    .secondary-btn {
+      margin-top: 6px;
+      width: 100%;
+      border: 1px solid #d8dcde;
+      background: white;
+      border-radius: 4px;
+      padding: 6px;
+      cursor: pointer;
+    }
+  </style>
+
+
+
+
+
+</head>
+
+<body>
+  <h3>AI Ticket Summarizer</h3>
+
+  <button id="summarizeBtn">Generate Summary</button>
+
+  <button id="summarizeBtnNative">Generate Summary in native language</button>
+
+  <pre id="summaryBox">Click to generate summary...</pre>
+
+
+  <hr />
+
+  <h4>🤖 AI Reply Composer</h4>
+
+  <div class="tone-group">
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="professional" />
+      Professional
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="friendly" />
+      Friendly
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="empathetic" />
+      Empathetic
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="apologetic" />
+      Apologetic
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="concise" />
+      Concise
+    </label>
+  </div>
+
+  <br />
+
+  <button id="composeReplyBtn" class="primary-btn">
+    ✨ Compose Reply
+  </button>
+
+  <div class="reply-container">
+    <pre id="replyBox">Reply will appear here...</pre>
+
+    <button id="copyReplyBtn" class="secondary-btn">
+      📋 Copy to Reply Editor
+    </button>
+  </div>
+
+
+  <script>
+    const client = ZAFClient.init();
+
+    async function getCompleteTicketData() {
+      const ticketData = await client.get('ticket');
+      const ticketId = ticketData.ticket.id;
+
+      // 1. Fetch ticket
+      const ticketResponse = await client.request({
+        url: `/api/v2/tickets/${ticketId}.json`,
+        type: "GET"
+      });
+      const ticket = ticketResponse.ticket;
+
+      // 2. Fetch ticket form
+      const formResponse = await client.request({
+        url: `/api/v2/ticket_forms/${ticket.ticket_form_id}.json`,
+        type: "GET"
+      });
+      const ticketForm = formResponse.ticket_form;
+      const formFieldIds = ticketForm.ticket_field_ids;
+
+      // 3. Fetch all ticket fields to get titles
+      const fieldsResponse = await client.request({
+        url: '/api/v2/ticket_fields.json',
+        type: 'GET'
+      });
+
+      // id-to-title map
+      const fieldMap = {};
+      fieldsResponse.ticket_fields.forEach(f => {
+        fieldMap[f.id] = f.title;
+      });
+
+      // 4. Only include fields used in this ticket and map to titles
+      const usedCustomFields = {};
+      ticket.custom_fields.forEach(f => {
+        if (formFieldIds.includes(f.id) && f.value !== null && f.value !== "") {
+          const title = fieldMap[f.id] || f.id;
+          usedCustomFields[title] = f.value;
+        }
+      });
+
+      return {
+        ticketId: ticket.id,
+        subject: ticket.subject,
+        description: ticket.description,
+        status: ticket.status,
+        priority: ticket.priority,
+        tags: ticket.tags || [],
+        ticketFormName: ticketForm.name,
+        customFields: usedCustomFields,
+        conversation: ""
+      };
+    }
+
+
+    document.getElementById("summarizeBtnNative").addEventListener("click", async () => {
+      const summaryBox = document.getElementById("summaryBox");
+      const btn = document.getElementById("summarizeBtnNative");
+
+      summaryBox.textContent = "Loading...";
+      btn.disabled = true;
+
+      try {
+        const ticketData = await getCompleteTicketData();
+
+        // 3. Fetch all ticket fields to get titles
+        const agentDetails = await client.request({
+          url: '/api/v2/users/me.json',
+          type: 'GET'
+        });
+
+        ticketData.language = agentDetails.user.locale;
+
+        const response = await client.request({
+          url: "http://localhost:3000/summarize",
+          type: "POST",
+          contentType: "application/json",
+          data: JSON.stringify(ticketData),
+          cors: true
+        });
+
+        summaryBox.textContent = response.summary;
+      } catch (err) {
+        summaryBox.textContent = "Error generating summary: " + (err.message || "Unknown error");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+
+    document.getElementById("summarizeBtn").addEventListener("click", async () => {
+      const summaryBox = document.getElementById("summaryBox");
+      const btn = document.getElementById("summarizeBtn");
+
+      summaryBox.textContent = "Loading...";
+      btn.disabled = true;
+
+      try {
+        const ticketData = await getCompleteTicketData();
+
+        const response = await client.request({
+          url: "http://localhost:3000/summarize",
+          type: "POST",
+          contentType: "application/json",
+          data: JSON.stringify(ticketData),
+          cors: true
+        });
+
+        summaryBox.textContent = response.summary;
+      } catch (err) {
+        summaryBox.textContent = "Error generating summary: " + (err.message || "Unknown error");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+
+    document.getElementById("composeReplyBtn").addEventListener("click", async () => {
+      const replyBox = document.getElementById("replyBox");
+      const btn = document.getElementById("composeReplyBtn");
+      const selectedTone = document.querySelector('input[name="tone"]:checked');
+      const tone = selectedTone ? selectedTone.value : null;
+
+      if (!tone) {
+        replyBox.textContent = "Please select a reply tone first.";
+        return;
+      }
+
+      replyBox.textContent = "Composing reply...";
+      btn.disabled = true;
+
+      try {
+        const ticketData = await getCompleteTicketData();
+
+        const response = await client.request({
+          url: "http://localhost:3000/compose-reply",
+          type: "POST",
+          contentType: "application/json",
+          data: JSON.stringify({
+            ...ticketData,
+            tone
+          }),
+          cors: true
+        });
+
+        // ⚠️ Only visible to agent
+        replyBox.textContent = response.reply;
+
+      } catch (err) {
+        replyBox.textContent = "❌ Failed to compose reply";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+
+    document.getElementById("copyReplyBtn").addEventListener("click", async () => {
+      const text = document.getElementById("replyBox").textContent;
+
+      if (!text || text.includes("Reply will appear")) {
+        alert("Please compose a reply first");
+        return;
+      }
+
+      try {
+        // Set the entire comment body
+
+        const htmlText = text
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line.length > 0)
+          .join('<br><br>');
+        await client.set('comment.text', htmlText);
+
+        alert("✅ Reply added to editor!");
+      } catch (err) {
+        console.error("Error setting text:", err);
+        alert("❌ Failed to insert text");
+      }
+    });
+    // Resize app in Zendesk sidebar
+    client.invoke('resize', { width: '100%', height: 'auto' });
+
+  </script>
+</body>
+
+</html>
