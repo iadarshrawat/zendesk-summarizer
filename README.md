@@ -79,26 +79,9 @@ Default backend URL used by the iframes: `http://localhost:3000`.
   - Calls: POST `/summarize` (full ticket payload) and POST `/compose-reply` (ticket + `tone`). Also checks `/health` on load.
   - Uses Zendesk App Framework to collect ticket data before POSTing.
 
-## Troubleshooting (short)
-- Missing Zendesk creds: `/auto-import-tickets` will not work — add `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN`, `ZENDESK_DOMAIN`.
-- Dimension mismatch in Pinecone: call DELETE `/force-delete-index` then restart server to recreate with dimension 768.
-- Upload failures: check file size (10MB multer limit; 5MB parsing limit) and file type.
-- Backend unreachable from iframe: ensure backend is running and accessible at `BACKEND_URL`.
-
 ## Where to look in the repo
 - `backend/server.js` — main server logic, endpoints, Pinecone and GenAI usage.
 - `Navbar/assets/iframe.html` — navbar UI for import/upload.
 - `Sidebar/assets/iframe.html` — sidebar UI for summarize/compose reply.
 
 ---
-
-## GitHub / commit guidance (minimal)
-- Do NOT commit secrets or uploads: keep `backend/.env` and the `uploads/` directory out of the repo.
-- Files added here: `README.md`, `.gitignore`, `backend/.env.example` (safe to commit).
-- Minimal commands to add and push these three files:
-
-```bash
-git add README.md .gitignore backend/.env.example
-git commit -m "chore: add README, .gitignore and env example"
-git push origin main
-```
