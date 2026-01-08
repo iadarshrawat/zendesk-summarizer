@@ -104,58 +104,6 @@
       margin: 16px 0;
     }
 
-    .file-upload-section {
-      margin-top: 12px;
-      padding: 12px;
-      background: #f8f9f9;
-      border: 2px dashed #d8dcde;
-      border-radius: 4px;
-      text-align: center;
-    }
-
-    .file-upload-section.dragover {
-      background: #e8f4f8;
-      border-color: #1f73b7;
-    }
-
-    #fileInput {
-      display: none;
-    }
-
-    .file-label {
-      cursor: pointer;
-      color: #1f73b7;
-      text-decoration: underline;
-    }
-
-    .upload-status {
-      margin-top: 8px;
-      padding: 8px;
-      border-radius: 4px;
-      font-size: 12px;
-    }
-
-    .upload-status.success {
-      background: #d4f4dd;
-      color: #0f5323;
-    }
-
-    .upload-status.error {
-      background: #ffd5d2;
-      color: #8c1d18;
-    }
-
-    .upload-status.loading {
-      background: #fff4e0;
-      color: #8c6d1f;
-    }
-
-    .file-info {
-      font-size: 11px;
-      color: #68737d;
-      margin-top: 4px;
-    }
-
     .collapse-section {
       margin-top: 12px;
     }
@@ -192,68 +140,6 @@
     .arrow.open {
       transform: rotate(90deg);
     }
-
-    .date-picker-group {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-      margin-bottom: 8px;
-    }
-
-    .date-input-wrapper {
-      flex: 1;
-    }
-
-    .date-input-wrapper label {
-      display: block;
-      font-size: 11px;
-      color: #68737d;
-      margin-bottom: 4px;
-    }
-
-    .date-input-wrapper input {
-      width: 100%;
-      padding: 6px 8px;
-      border: 1px solid #d8dcde;
-      border-radius: 4px;
-      font-size: 12px;
-      box-sizing: border-box;
-    }
-
-    .auto-import-section {
-      margin-top: 12px;
-    }
-
-    .import-info {
-      background: #e8f4f8;
-      border: 1px solid #1f73b7;
-      border-radius: 4px;
-      padding: 8px;
-      font-size: 11px;
-      margin-top: 8px;
-    }
-
-    .progress-bar {
-      width: 100%;
-      height: 20px;
-      background: #f8f9f9;
-      border: 1px solid #d8dcde;
-      border-radius: 4px;
-      margin-top: 8px;
-      overflow: hidden;
-    }
-
-    .progress-fill {
-      height: 100%;
-      background: #1f73b7;
-      transition: width 0.3s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-size: 11px;
-      font-weight: bold;
-    }
   </style>
 </head>
 
@@ -275,68 +161,8 @@
 
   <hr />
 
-  <!-- NEW: Auto-Import Tickets Section -->
-  <div class="collapse-section">
-    <div class="collapse-header" onclick="toggleSection('autoImportSection')">
-      <span>🔄 Auto-Import Tickets from Zendesk</span>
-      <span class="arrow" id="autoImportArrow">▶</span>
-    </div>
-    <div class="collapse-content" id="autoImportSection">
-      <div class="auto-import-section">
-        <div class="date-picker-group">
-          <div class="date-input-wrapper">
-            <label for="startDate">Start Date</label>
-            <input type="date" id="startDate" />
-          </div>
-          <div class="date-input-wrapper">
-            <label for="endDate">End Date</label>
-            <input type="date" id="endDate" />
-          </div>
-        </div>
-        
-        <button id="autoImportBtn" class="primary-btn">
-          📥 Fetch & Import Tickets
-        </button>
-        
-        <div id="importProgress" style="display: none;">
-          <div class="progress-bar">
-            <div class="progress-fill" id="progressFill">0%</div>
-          </div>
-        </div>
-        
-        <div id="autoImportStatus"></div>
-        
-        <div class="import-info">
-          ℹ️ This will fetch all tickets between the selected dates, including their comments and metadata, then automatically import them into the knowledge base.
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <hr />
-
-  <!-- Collapsible File Import Section -->
-  <div class="collapse-section">
-    <div class="collapse-header" onclick="toggleSection('fileImportSection')">
-      <span>📁 Manual Import (Upload File)</span>
-      <span class="arrow" id="fileImportArrow">▶</span>
-    </div>
-    <div class="collapse-content" id="fileImportSection">
-      <div class="file-upload-section" id="dropZone">
-        <div>
-          <p style="margin: 8px 0;">Drop file here or <label for="fileInput" class="file-label">browse</label></p>
-          <input type="file" id="fileInput" accept=".txt,.md,.csv,.json" />
-          <div class="file-info">Supported: .txt, .md, .csv, .json (max 10MB)</div>
-        </div>
-        <div id="uploadStatus"></div>
-      </div>
-    </div>
-  </div>
-
-  <hr />
-
   <!-- Reply Composer Section -->
-  <h4>✨ AI Reply Composer</h4>
+  <h4>AI Reply Composer</h4>
 
   <div class="tone-group">
     <label class="tone-pill">
@@ -362,7 +188,7 @@
   </div>
 
   <button id="composeReplyBtn" class="primary-btn">
-    ✨ Compose Reply
+    Compose Reply
   </button>
 
   <div class="reply-container">
@@ -396,12 +222,6 @@
 
     // Check connection on load
     checkBackendConnection();
-
-    // Set default dates (last 30 days)
-    const today = new Date();
-    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-    document.getElementById('endDate').valueAsDate = today;
-    document.getElementById('startDate').valueAsDate = thirtyDaysAgo;
 
     // Toggle collapsible sections
     function toggleSection(sectionId) {
@@ -458,158 +278,6 @@
         customFields: usedCustomFields,
         conversation: ""
       };
-    }
-
-    // NEW: Auto-Import Tickets Handler
-    document.getElementById("autoImportBtn").addEventListener("click", async () => {
-      const startDate = document.getElementById("startDate").value;
-      const endDate = document.getElementById("endDate").value;
-      const statusDiv = document.getElementById("autoImportStatus");
-      const progressDiv = document.getElementById("importProgress");
-      const progressFill = document.getElementById("progressFill");
-      const btn = document.getElementById("autoImportBtn");
-
-      if (!startDate || !endDate) {
-        statusDiv.className = 'upload-status error';
-        statusDiv.textContent = "❌ Please select both start and end dates";
-        return;
-      }
-
-      if (new Date(startDate) > new Date(endDate)) {
-        statusDiv.className = 'upload-status error';
-        statusDiv.textContent = "❌ Start date must be before end date";
-        return;
-      }
-
-      btn.disabled = true;
-      statusDiv.className = 'upload-status loading';
-      statusDiv.textContent = "🔄 Fetching tickets from Zendesk...";
-      progressDiv.style.display = 'block';
-      progressFill.style.width = '10%';
-      progressFill.textContent = '10%';
-
-      try {
-        // Send request to backend with date range
-        const response = await fetch('http://localhost:3000/auto-import-tickets', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            startDate: startDate,
-            endDate: endDate,
-            zendeskSubdomain: window.location.hostname.split('.')[0] // Extract subdomain
-          }),
-          mode: 'cors'
-        });
-
-        progressFill.style.width = '50%';
-        progressFill.textContent = '50%';
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          throw new Error(errorData.error || `Server error: ${response.status}`);
-        }
-
-        const result = await response.json();
-        
-        progressFill.style.width = '100%';
-        progressFill.textContent = '100%';
-
-        statusDiv.className = 'upload-status success';
-        statusDiv.innerHTML = `
-          ✅ Successfully imported!<br>
-          📊 Tickets: ${result.ticketsProcessed}<br>
-          📦 Chunks: ${result.totalChunks}<br>
-          ⏱️ Time: ${result.processingTime}
-        `;
-
-        setTimeout(() => {
-          progressDiv.style.display = 'none';
-        }, 2000);
-
-      } catch (err) {
-        console.error('❌ Auto-import error:', err);
-        statusDiv.className = 'upload-status error';
-        
-        if (err.message === 'Failed to fetch') {
-          statusDiv.textContent = `❌ Cannot connect to server. Make sure the backend is running on http://localhost:3000`;
-        } else {
-          statusDiv.textContent = `❌ Error: ${err.message}`;
-        }
-        
-        progressDiv.style.display = 'none';
-      } finally {
-        btn.disabled = false;
-      }
-    });
-
-    // File Upload Handler
-    const fileInput = document.getElementById('fileInput');
-    const dropZone = document.getElementById('dropZone');
-    const uploadStatus = document.getElementById('uploadStatus');
-
-    fileInput.addEventListener('change', handleFileUpload);
-
-    // Drag and drop
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      dropZone.classList.add('dragover');
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-      dropZone.classList.remove('dragover');
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('dragover');
-      
-      const files = e.dataTransfer.files;
-      if (files.length > 0) {
-        fileInput.files = files;
-        handleFileUpload();
-      }
-    });
-
-    async function handleFileUpload() {
-      const file = fileInput.files[0];
-      if (!file) return;
-
-      uploadStatus.className = 'upload-status loading';
-      uploadStatus.textContent = `⏳ Uploading ${file.name}...`;
-
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const response = await fetch('http://localhost:3000/import-file', {
-          method: 'POST',
-          body: formData,
-          mode: 'cors'
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          throw new Error(errorData.error || errorData.details || `Server error: ${response.status}`);
-        }
-
-        const result = await response.json();
-
-        uploadStatus.className = 'upload-status success';
-        uploadStatus.textContent = `✅ Successfully imported: ${result.fileName}`;
-      } catch (err) {
-        console.error('❌ Upload error:', err);
-        uploadStatus.className = 'upload-status error';
-        
-        if (err.message === 'Failed to fetch') {
-          uploadStatus.textContent = `❌ Cannot connect to server. Make sure the backend is running`;
-        } else {
-          uploadStatus.textContent = `❌ Error: ${err.message}`;
-        }
-      } finally {
-        fileInput.value = '';
-      }
     }
 
     // Summarize in native language
@@ -735,7 +403,7 @@
     });
 
     // Resize app
-    client.invoke('resize', { width: '100%', height: '8000px' });
+    client.invoke('resize', { width: '100%', height: '500px' });
   </script>
 </body>
 
