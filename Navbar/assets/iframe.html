@@ -374,12 +374,16 @@
   </div>
 
   <script>
+    // ============================================
+    // CONFIGURATION - Change only this variable
+    // ============================================
+    const BACKEND_URL = 'http://localhost:3000';
+    // const BACKEND_URL = 'https://llm-replyer.onrender.com';
+    // ============================================
+
     // ==================== INITIALIZATION ====================
     // Initialize Zendesk App Framework client
     const client = ZAFClient.init();
-    
-    // Backend server URL (configure based on your environment)
-    const BACKEND_URL = 'http://localhost:3000';
 
     // ==================== DEFAULT DATE SETUP ====================
     // Set default date range to last 30 days

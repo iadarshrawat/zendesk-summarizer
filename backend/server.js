@@ -139,6 +139,40 @@ async function initializeIndex() {
   }
 }
 
+
+function cleanMarkdown(text) {
+  if (!text) return "";
+
+  return text
+    // Remove bold **text** or __text__
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    
+    // Remove italic *text* or _text_
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/_(.*?)_/g, "$1")
+    
+    // Remove headers ### text
+    .replace(/^#{1,6}\s+/gm, "")
+    
+    // Remove code blocks ```code```
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`(.*?)`/g, "$1")
+    
+    // Clean up bullet points - convert to natural text
+    .replace(/^\s*[-*+]\s+/gm, "")
+    
+    // Preserve numbered lists but clean format
+    .replace(/^\s*(\d+)\.\s+/gm, "$1. ")
+    
+    // Clean excessive line breaks (more than 2)
+    .replace(/\n{3,}/g, "\n\n")
+    
+    // Trim whitespace
+    .trim();
+}
+
+
 // ✅ ADDED: Force delete endpoint for troubleshooting
 app.delete("/force-delete-index", async (req, res) => {
   try {
@@ -212,26 +246,32 @@ async function fetchTicketsByDateRange(startDate, endDate) {
   let nextUrl = `/search.json?query=${encodedQuery}&sort_by=created_at&sort_order=desc`;
   let page = 1;
   
-  console.log(`🔍 Search query: ${query}`);
-  console.log(`🔍 Encoded URL: ${nextUrl}`);
+  // console.log(`🔍 Search query: ${query}`);
+  // console.log(`🔍 Encoded URL: ${nextUrl}`);
   
   while (nextUrl) {
     console.log(`📄 Fetching page ${page}...`);
     
     try {
+      console.log(`➡️ Request URL: ${nextUrl}`);
       const response = await zendeskClient.get(nextUrl);
+      if(page === 2){
+      console.log(`✅ Received response ${response}`);
+      }
       const tickets = response.data.results || [];
 
-      console.log(`tickets.length`, tickets);
+    
       
       console.log(`✓ Found ${tickets.length} tickets on page ${page}`);
       allTickets.push(...tickets);
       
-      // For pagination, Zendesk returns absolute URLs in next_page
-      // We need to extract just the path + query
+      // For pagination, Zendesk returns absolute URLs in next_page.
+      // Use the absolute URL directly to avoid mismatching the baseURL
+      // (sometimes pathname includes `/api/v2` which would duplicate when
+      // combined with the client baseURL and cause 404s).
       if (response.data.next_page) {
-        const url = new URL(response.data.next_page);
-        nextUrl = url.pathname + url.search;
+        nextUrl = response.data.next_page; // absolute URL
+        console.log(`➡️ Next page URL: ${nextUrl}`);
       } else {
         nextUrl = null;
       }
@@ -424,7 +464,8 @@ async function extractTextFromFile(filePath, mimetype, originalName) {
   return { type: 'text', data: fileContent.slice(0, 10000) };
 }
 
-/* ================= PROMPTS ================= */
+
+/* ================= IMPROVED PROMPTS ================= */
 
 function buildSummaryPrompt(ticket) {
   const customFieldsText =
@@ -457,22 +498,69 @@ Provide:
 1. Short summary (2–3 lines)
 2. Main customer issue
 3. Recommended next action
+
+Use clear formatting with bold text for emphasis where appropriate.
 `;
 }
 
-function buildReplyPrompt(ticket, tone, kbChunks) {
+function buildReplyPrompt(ticket, tone, kbChunks, language) {
   return `
-You are a Zendesk support agent.
+You are a Zendesk support agent writing a reply to a customer.
 
-Use ONLY the information from the knowledge base below.
-If the KB does not contain the answer, say:
-"I will check this and get back to you."
+====================
+LANGUAGE REQUIREMENT (CRITICAL)
+====================
+
+YOU MUST write the ENTIRE reply in the language: ${ticket.language}
+
+This is NON-NEGOTIABLE. Every word, sentence, and phrase must be in this language.
+
+====================
+TONE RULES (MANDATORY)
+====================
+
+IMPORTANT: The tone MUST strictly follow the selected tone.
+Do NOT default to a neutral or professional tone unless explicitly required by the tone rules below.
 
 Tone: ${tone}
 
+- professional:
+  Polite, formal, business-like language.
+  No emojis. No casual words.
+  Calm, confident, and respectful.
+
+- friendly:
+  Warm, conversational, and approachable.
+  Light, human wording.
+  Still professional, but relaxed and positive.
+
+- empathetic:
+  Show understanding of the customer's frustration or concern.
+  Acknowledge feelings before giving information.
+  Use reassuring and caring language.
+
+- apologetic:
+  Clearly apologize at the beginning.
+  Take ownership of the inconvenience.
+  Reassuring and solution-focused.
+
+- concise:
+  Very short and direct.
+  Minimal wording.
+  No unnecessary explanations.
+
+You MUST adapt wording, sentence structure, and emotional depth based on the selected tone.
+If tone is violated, the response is incorrect.
+
 ====================
-Knowledge Base:
+KNOWLEDGE BASE (USE ONLY THIS)
+====================
 ${kbChunks}
+
+If the knowledge base does NOT contain the answer, reply in the agent's language with an appropriate message like "I will check this and get back to you."
+
+====================
+TICKET DETAILS
 ====================
 
 Ticket Subject:
@@ -481,13 +569,25 @@ ${ticket.subject}
 Customer Message:
 ${ticket.description}
 
-Rules:
-- No hallucinations
-- No invented steps
-- Clear and helpful
-- Ready to send
+====================
+STRICT RULES
+====================
+- CRITICAL: Write the ENTIRE reply in ${ticket.language}
+- Use ONLY information from the knowledge base
+- No hallucinations or assumptions
+- No invented steps or procedures
+- Do NOT mention the knowledge base
+- Write in clear paragraphs with line breaks
+- Use **bold** only for critical points
+- Response must be ready to send to the customer
+- The reply must be natural and fluent
+
+====================
+WRITE THE REPLY BELOW
+====================
 `;
 }
+
 
 /* ================= NEW: AUTO-IMPORT TICKETS ENDPOINT ================= */
 
@@ -604,7 +704,14 @@ app.post("/summarize", async (req, res) => {
       return res.status(400).json({ error: "Invalid ticket payload - ticketId required" });
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-2.0-flash-exp",
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.8,
+        topK: 40,
+      }
+    });
 
     let prompt = buildSummaryPrompt(ticket);
 
@@ -615,7 +722,7 @@ app.post("/summarize", async (req, res) => {
     console.log("📝 Generating summary for ticket:", ticket.ticketId);
 
     const result = await model.generateContent(prompt);
-    const summary = result.response.text();
+    let summary = result.response.text();
 
     res.json({
       summary,
@@ -629,7 +736,6 @@ app.post("/summarize", async (req, res) => {
     });
   }
 });
-
 /* ================= KB INGESTION ================= */
 
 app.post("/ingest-kb", async (req, res) => {
@@ -830,16 +936,26 @@ app.post("/compose-reply", async (req, res) => {
       .filter(Boolean)
       .join("\n\n") || "No relevant knowledge base found.";
 
-    const prompt = buildReplyPrompt(ticket, ticket.tone || "professional", kbChunks);
+    const prompt = buildReplyPrompt(ticket, ticket.tone|| "professional", kbChunks);
+    console.log("📝 promt", prompt);
 
     console.log("🤖 Generating reply for ticket:", ticket.ticketId);
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-2.0-flash-exp",
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.8,
+        topK: 40,
+      }
+    });
+    
     const response = await model.generateContent(prompt);
+    let replyText = response.response.text();
 
     res.json({
       ticketId: ticket.ticketId,
-      reply: response.response.text(),
+      reply: replyText,
       sources: results.matches.map(m => ({
         title: m.metadata?.subject || m.metadata?.title,
         type: m.metadata?.type,
@@ -918,6 +1034,66 @@ app.delete("/reset-kb", async (req, res) => {
   } catch (err) {
     console.error("❌ Reset error:", err);
     res.status(500).json({ error: "Reset failed", details: err.message });
+  }
+});
+
+/* ================= TRANSLATE TEXT ================= */
+
+app.post("/translate", async (req, res) => {
+  try {
+    const { text, targetLanguage } = req.body;
+
+    if (!text || !targetLanguage) {
+      return res.status(400).json({ error: "text and targetLanguage are required" });
+    }
+
+    console.log(`🌐 Translating text to ${targetLanguage}...`);
+
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-2.0-flash-exp",
+      generationConfig: {
+        temperature: 0.3,
+        topP: 0.8,
+        topK: 40,
+      }
+    });
+
+    const prompt = `
+You are a professional translator.
+
+Translate the following text to ${targetLanguage}.
+
+CRITICAL RULES:
+- Maintain the exact same tone and style
+- Preserve all formatting (line breaks, bold text, etc.)
+- Keep technical terms accurate
+- If the text is already in ${targetLanguage}, return it unchanged
+- Do NOT add any preamble or explanation
+- Return ONLY the translated text
+
+Text to translate:
+${text}
+
+Translated text:
+`;
+
+    const result = await model.generateContent(prompt);
+    const translatedText = result.response.text().trim();
+
+    console.log(`✅ Translation completed`);
+
+    res.json({
+      originalText: text,
+      translatedText: translatedText,
+      targetLanguage: targetLanguage
+    });
+
+  } catch (err) {
+    console.error("❌ Translation error:", err);
+    res.status(500).json({ 
+      error: "Translation failed", 
+      details: err.message 
+    });
   }
 });
 
