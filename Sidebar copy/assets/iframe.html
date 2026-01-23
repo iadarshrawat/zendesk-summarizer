@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>AI Ticket Assistant</title>
+  <script src="https://static.zdassets.com/zendesk_app_framework_sdk/2.0/zaf_sdk.min.js"></script>
+  <!-- import for markdown file -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    /* ================= BASE ================= */
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 12px;
+      padding: 8px;
+      margin: 0;
+      background: #ffffff;
+      color: #2f3941;
+    }
+
+    /* ================= HEADER ================= */
+    .heading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    h4 {
+      margin: 15px 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    /* ================= TONE PILLS ================= */
+    .tone-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .tone-pill {
+      border: 1px solid #d8dcde;
+      border-radius: 14px;
+      padding: 4px 10px;
+      cursor: pointer;
+      background: #f8f9f9;
+      user-select: none;
+      font-size: 11px;
+      line-height: 1.4;
+      transition: all 0.2s;
+    }
+
+    .tone-pill:hover {
+      background: #e8ebed;
+    }
+
+    .tone-pill input {
+      display: none;
+    }
+
+    .tone-pill:has(input:checked) {
+      background: #1f73b7;
+      color: #ffffff;
+      border-color: #1f73b7;
+    }
+
+    /* ================= BUTTONS ================= */
+    .primary-btn {
+      background: #1f73b7;
+      color: white;
+      border-radius: 4px;
+      padding: 7px 10px;
+      cursor: pointer;
+      width: 100%;
+      font-size: 12px;
+      border: none;
+      margin-top: 6px;
+      transition: background 0.2s;
+    }
+
+    .primary-btn:hover:not(:disabled) {
+      background: #155a8a;
+    }
+
+    .primary-btn:disabled {
+      background: #c2d4e8;
+      cursor: not-allowed;
+    }
+
+    .changeLang-btn {
+      width: 100%;
+      border: 1px solid #1f73b7;
+      background: #ffffff;
+      color: #1f73b7;
+      border-radius: 4px;
+      padding: 6px;
+      cursor: pointer;
+      font-size: 11px;
+      margin-top: 6px;
+      transition: all 0.2s;
+    }
+
+    .changeLang-btn:hover:not(:disabled) {
+      background: #e8f4f8;
+    }
+
+    .changeLang-btn:disabled {
+      background: #f0f0f0;
+      cursor: not-allowed;
+      color: #999;
+      border-color: #d8dcde;
+    }
+
+    /* ================= ZENDESK IFRAME SAFETY ================= */
+    html,
+    body {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
+    /* ================= LANGUAGE INFO ================= */
+    .language-info {
+      font-size: 10px;
+      color: #68737d;
+      margin-top: 4px;
+      text-align: center;
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Reply Composer -->
+  <div class="heading">
+    <h4>AI Reply Composer</h4>
+  </div>
+
+  <div class="tone-group">
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="professional" /> Professional
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="friendly" /> Friendly
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="empathetic" /> Empathetic
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="apologetic" /> Apologetic
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="concise" /> Concise
+    </label>
+  </div>
+
+  <button id="composeReplyBtn" class="primary-btn">
+    Compose Reply
+  </button>
+
+  <button id="changeLangBtn" class="changeLang-btn">
+    🌐 Translate to Requester Language
+  </button>
+
+  <div id="languageInfo" class="language-info"></div>
+
+  <script>
+    const BACKEND_URL = 'http://localhost:3000';
+    const client = ZAFClient.init();
+
+    let agentLocale = 'en-US';
+    let ticketLocale = 'en-US';
+
+
+
+    /* =========================
+       UPDATE LANGUAGE INFO
+    ========================== */
+    function updateLanguageInfo() {
+      const languageInfo = document.getElementById('languageInfo');
+      
+      if (ticketLocale !== agentLocale) {
+        languageInfo.style.display = 'block';
+        languageInfo.textContent = `Agent: ${agentLocale} | Requester: ${ticketLocale}`;
+      } else {
+        languageInfo.style.display = 'block';
+        languageInfo.textContent = `Language: ${agentLocale}`;
+      }
+    }
+
+    /* =========================
+       INITIALIZE AGENT LOCALE
+    ========================== */
+    async function initAgentLocale() {
+      try {
+        const agent = await client.request('/api/v2/users/me.json');
+        agentLocale = agent.user.locale || 'en-US';
+        console.log(`👤 Agent locale: ${agentLocale}`);
+        updateLanguageInfo();
+      } catch (e) {
+        console.error('Failed to get agent locale:', e);
+      }
+    }
+
+    /* =========================
+       GET TICKET DATA
+    ========================== */
+    async function getCompleteTicketData() {
+      const ticketData = await client.get('ticket');
+      const ticketId = ticketData.ticket.id;
+
+      const ticketResponse = await client.request(`/api/v2/tickets/${ticketId}.json`);
+      const ticket = ticketResponse.ticket;
+
+      // Get ticket locale from requester
+      try {
+        if (ticket.requester_id) {
+          const requesterResponse = await client.request(`/api/v2/users/${ticket.requester_id}.json`);
+          ticketLocale = requesterResponse.user.locale || agentLocale;
+          console.log(`🎫 Ticket locale: ${ticketLocale}`);
+          updateLanguageInfo();
+        }
+      } catch (e) {
+        console.warn('Could not fetch ticket locale, using agent locale');
+        ticketLocale = agentLocale;
+        updateLanguageInfo();
+      }
+
+      return {
+        ticketId: ticket.id,
+        subject: ticket.subject,
+        description: ticket.description,
+        status: ticket.status,
+        priority: ticket.priority,
+        tags: ticket.tags || []
+      };
+    }
+
+    /* =========================
+       TRANSLATE TEXT
+    ========================== */
+    async function translateText(text, targetLanguage) {
+      try {
+        console.log(`🌐 Translating to ${targetLanguage}...`);
+        
+        const response = await client.request({
+          url: `${BACKEND_URL}/translate`,
+          type: "POST",
+          contentType: "application/json",
+          data: JSON.stringify({
+            text: text,
+            targetLanguage: targetLanguage
+          }),
+          cors: true
+        });
+
+        console.log(`✅ Translation completed`);
+        return response.translatedText;
+      } catch (err) {
+        console.error("❌ Translation error:", err);
+        throw err;
+      }
+    }
+
+    /* =========================
+       COMPOSE REPLY BUTTON
+    ========================== */
+    document.getElementById("composeReplyBtn").addEventListener("click", async () => {
+      const composeBtn = document.getElementById("composeReplyBtn");
+      const tone = document.querySelector('input[name="tone"]:checked');
+
+      if (!tone) {
+        alert("❌ Please select a reply tone first");
+        return;
+      }
+
+      try {
+        // Disable button and show loading state
+        composeBtn.disabled = true;
+        composeBtn.textContent = "🔄 Composing...";
+
+        // Get ticket data (this also fetches ticket locale)
+        const ticketData = await getCompleteTicketData();
+
+        // Always generate reply in agent's language
+        const response = await client.request({
+          url: `${BACKEND_URL}/compose-reply`,
+          type: "POST",
+          contentType: "application/json",
+          data: JSON.stringify({
+            ...ticketData,
+            tone: tone.value,
+            language: agentLocale
+          }),
+          cors: true
+        });
+
+        await client.set('ticket.comment.text', "");
+        await client.invoke('ticket.comment.appendMarkdown', response.reply);
+   
+        console.log(`✓ Reply generated in ${agentLocale}`);
+
+        // Show success message
+        composeBtn.textContent = "✅ Reply Added!";
+        setTimeout(() => {
+          composeBtn.textContent = "Compose Reply";
+        }, 2000);
+
+      } catch (err) {
+        console.error("❌ Compose error:", err);
+        alert("❌ Failed to compose reply. Check console for details.");
+        composeBtn.textContent = "Compose Reply";
+      } finally {
+        composeBtn.disabled = false;
+      }
+    });
+
+    /* =========================
+       TRANSLATE BUTTON
+    ========================== */
+    document.getElementById("changeLangBtn").addEventListener("click", async () => {
+      const changeLangBtn = document.getElementById("changeLangBtn");
+ 
+      // Check if translation is needed
+      if (ticketLocale === agentLocale) {
+        alert(`ℹ️ Requester language is already ${ticketLocale}. No translation needed.`);
+        return;
+      }
+
+      console.log(`🌐 Translating comment to ${ticketLocale}...`);
+
+      try {
+        // Disable button during translation
+        changeLangBtn.disabled = true;
+        changeLangBtn.textContent = "🔄 Translating...";
+
+        // Get current text from Zendesk comment editor
+        const commentData = await client.get('ticket.comment');
+        let currentText = commentData['ticket.comment'].text;
+
+        // Strip HTML tags to get plain text
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = currentText;
+        currentText = tempDiv.textContent || tempDiv.innerText || '';
+
+        if (!currentText || currentText.trim() === '') {
+          alert("⚠️ No text found in the comment editor to translate!");
+          changeLangBtn.textContent = "🌐 Translate to Requester Language";
+          changeLangBtn.disabled = false;
+          return;
+        }
+
+        console.log(`📝 Text to translate: ${currentText.length} characters`);
+        console.log(`🔄 Translating from ${agentLocale} to ${ticketLocale}`);
+
+        // Translate the text
+        const translatedText = await translateText(currentText, ticketLocale);
+        console.log(translatedText);
+        // Replace the text in comment editor
+        await client.set('ticket.comment.text', "");
+        await client.invoke('ticket.comment.appendMarkdown', translatedText);
+
+        console.log(`✅ Text replaced in editor`);
+
+        // Show success message
+        changeLangBtn.textContent = "✅ Translated!";
+        setTimeout(() => {
+          changeLangBtn.textContent = "🌐 Translate to Requester Language";
+          changeLangBtn.disabled = false;
+        }, 2000);
+
+      } catch (err) {
+        console.error("❌ Translation error:", err);
+        alert("❌ Failed to translate text. Check console for details.");
+        changeLangBtn.textContent = "🌐 Translate to Requester Language";
+        changeLangBtn.disabled = false;
+      }
+    });
+
+    /* =========================
+       INITIALIZE APP
+    ========================== */
+    initAgentLocale();
+    client.invoke('resize', { width: '100%', height: '240px' });
+  </script>
+</body>
+
+</html>

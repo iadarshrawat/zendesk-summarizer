@@ -16,129 +16,65 @@
 
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      background: transparent;
-      padding: 8px;
+      background: #f8f9f9;
+      padding: 16px;
     }
 
-    /* ==================== NAVBAR BUTTON ==================== */
-    .navbar-button {
-      background: #1f73b7;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      padding: 6px 12px;
-      font-size: 12px;
-      cursor: pointer;
-      white-space: nowrap;
-      display: flex;
-      align-items: center;
-      gap: 4px;
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
     }
 
-    .navbar-button:hover {
-      background: #155a8a;
+    /* ==================== HEADER ==================== */
+    .header {
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #d8dcde;
     }
 
-    .navbar-button:disabled {
-      background: #c2d4e8;
-      cursor: not-allowed;
+    .header h1 {
+      font-size: 22px;
+      font-weight: 600;
+      color: #2f3941;
+      margin-bottom: 4px;
     }
 
-    /* ==================== MODAL STYLES ==================== */
-    .modal-overlay {
-      display: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.5);
-      z-index: 9998;
+    .header p {
+      font-size: 13px;
+      color: #68737d;
     }
 
-    .modal-overlay.active {
-      display: block;
-    }
-
-    .modal {
-      display: none;
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
+    /* ==================== SECTION ==================== */
+    .section {
       background: white;
       border-radius: 8px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-      width: 90%;
-      max-width: 500px;
-      max-height: 80vh;
-      overflow-y: auto;
-      z-index: 9999;
-    }
-
-    .modal.active {
-      display: block;
-    }
-
-    /* ==================== MODAL HEADER ==================== */
-    .modal-header {
-      padding: 16px;
-      border-bottom: 1px solid #d8dcde;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .modal-header h2 {
-      font-size: 18px;
-      font-weight: 600;
-    }
-
-    .close-btn {
-      background: none;
-      border: none;
-      font-size: 24px;
-      cursor: pointer;
-      color: #68737d;
-      padding: 0;
-      width: 30px;
-      height: 30px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .close-btn:hover {
-      color: #2f3941;
-      background: #f8f9f9;
-      border-radius: 4px;
-    }
-
-    /* ==================== MODAL BODY ==================== */
-    .modal-body {
-      padding: 16px;
-    }
-
-    .section {
-      margin-bottom: 24px;
-    }
-
-    .section:last-child {
-      margin-bottom: 0;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     }
 
     .section-title {
-      font-size: 14px;
+      font-size: 16px;
       font-weight: 600;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
       color: #2f3941;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-description {
+      font-size: 12px;
+      color: #68737d;
+      margin-bottom: 16px;
+      line-height: 1.5;
     }
 
     /* ==================== DATE PICKER ==================== */
     .date-picker-group {
       display: flex;
       gap: 12px;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
     }
 
     .date-input-wrapper {
@@ -148,16 +84,24 @@
     .date-input-wrapper label {
       display: block;
       font-size: 12px;
+      font-weight: 500;
       color: #68737d;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
     }
 
     .date-input-wrapper input {
       width: 100%;
-      padding: 8px;
+      padding: 10px;
       border: 1px solid #d8dcde;
       border-radius: 4px;
       font-size: 13px;
+      transition: border-color 0.2s;
+    }
+
+    .date-input-wrapper input:focus {
+      outline: none;
+      border-color: #1f73b7;
+      box-shadow: 0 0 0 3px rgba(31, 115, 183, 0.1);
     }
 
     /* ==================== BUTTONS ==================== */
@@ -166,11 +110,16 @@
       color: white;
       border: none;
       border-radius: 4px;
-      padding: 10px 16px;
+      padding: 12px 16px;
       cursor: pointer;
       width: 100%;
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 500;
+      transition: background 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
     }
 
     .primary-btn:disabled {
@@ -182,39 +131,57 @@
       background: #155a8a;
     }
 
-    /* ==================== INFO & STATUS MESSAGES ==================== */
-    .info-box {
-      background: #e8f4f8;
+    .secondary-btn {
+      background: white;
+      color: #1f73b7;
       border: 1px solid #1f73b7;
       border-radius: 4px;
-      padding: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
       font-size: 12px;
+      font-weight: 500;
+      transition: all 0.2s;
       margin-top: 12px;
-      color: #2f3941;
     }
 
+    .secondary-btn:hover {
+      background: #e8f4f8;
+    }
+
+    /* ==================== STATUS MESSAGES ==================== */
     .status-message {
-      margin-top: 12px;
-      padding: 10px;
+      margin-top: 16px;
+      padding: 12px;
       border-radius: 4px;
       font-size: 12px;
       display: none;
+      line-height: 1.6;
     }
 
     .status-message.success {
       background: #d4f4dd;
+      border: 1px solid #0f5323;
       color: #0f5323;
       display: block;
     }
 
     .status-message.error {
       background: #ffd5d2;
+      border: 1px solid #8c1d18;
       color: #8c1d18;
       display: block;
     }
 
     .status-message.loading {
       background: #fff4e0;
+      border: 1px solid #8c6d1f;
+      color: #8c6d1f;
+      display: block;
+    }
+
+    .status-message.warning {
+      background: #fff4e0;
+      border: 1px solid #f79a3e;
       color: #8c6d1f;
       display: block;
     }
@@ -222,11 +189,11 @@
     /* ==================== PROGRESS BAR ==================== */
     .progress-bar {
       width: 100%;
-      height: 24px;
+      height: 28px;
       background: #f8f9f9;
       border: 1px solid #d8dcde;
       border-radius: 4px;
-      margin-top: 12px;
+      margin-top: 16px;
       overflow: hidden;
       display: none;
     }
@@ -237,29 +204,22 @@
 
     .progress-fill {
       height: 100%;
-      background: #1f73b7;
+      background: linear-gradient(90deg, #1f73b7, #2e8ed6);
       transition: width 0.3s;
       display: flex;
       align-items: center;
       justify-content: center;
       color: white;
-      font-size: 11px;
-      font-weight: bold;
-    }
-
-    /* ==================== DIVIDER ==================== */
-    .divider {
-      border: none;
-      border-top: 1px solid #d8dcde;
-      margin: 20px 0;
+      font-size: 12px;
+      font-weight: 600;
     }
 
     /* ==================== FILE UPLOAD SECTION ==================== */
     .file-upload-section {
-      padding: 16px;
+      padding: 24px;
       background: #f8f9f9;
       border: 2px dashed #d8dcde;
-      border-radius: 4px;
+      border-radius: 6px;
       text-align: center;
       cursor: pointer;
       transition: all 0.2s;
@@ -273,6 +233,7 @@
     .file-upload-section.dragover {
       background: #e8f4f8;
       border-color: #1f73b7;
+      transform: scale(1.01);
     }
 
     #fileInput {
@@ -283,94 +244,130 @@
       color: #1f73b7;
       text-decoration: underline;
       cursor: pointer;
+      font-weight: 500;
     }
 
     .file-info {
       font-size: 11px;
       color: #68737d;
-      margin-top: 6px;
+      margin-top: 8px;
+    }
+
+    .upload-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+
+    /* ==================== INFO BOX ==================== */
+    .info-box {
+      background: #e8f4f8;
+      border-left: 4px solid #1f73b7;
+      border-radius: 4px;
+      padding: 12px;
+      font-size: 12px;
+      margin-top: 16px;
+      color: #2f3941;
+      line-height: 1.5;
+    }
+
+    /* ==================== HISTORY SECTION ==================== */
+    .history-item {
+      padding: 12px;
+      background: #f8f9f9;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+
+    .history-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .history-date {
+      font-weight: 600;
+      color: #2f3941;
+      margin-bottom: 4px;
+    }
+
+    .history-stats {
+      color: #68737d;
+    }
+
+    .no-history {
+      text-align: center;
+      color: #68737d;
+      padding: 20px;
+      font-size: 12px;
+    }
+
+    /* ==================== DIVIDER ==================== */
+    .divider {
+      height: 1px;
+      background: #d8dcde;
+      margin: 24px 0;
     }
   </style>
 </head>
 
 <body>
-  <!-- Main navbar button to trigger the importer modal -->
-  <button class="navbar-button" id="openImporterBtn">
-    📥 Import Tickets
-  </button>
+  <div class="container">
 
-  <!-- Modal overlay (dark background) -->
-  <div class="modal-overlay" id="modalOverlay"></div>
+    <!-- ==================== AUTO-IMPORT SECTION ==================== -->
+    <div class="section">
+      <div class="section-title">
+        <span>🔄</span>
+        <span>Auto-Import from Zendesk</span>
+      </div>
 
-  <!-- Main import modal -->
-  <div class="modal" id="importerModal">
-    <div class="modal-header">
-      <h2>📥 Import Tickets to Knowledge Base</h2>
-      <button class="close-btn" id="closeModalBtn">×</button>
-    </div>
-
-    <div class="modal-body">
-      <!-- ==================== AUTO-IMPORT SECTION ==================== -->
-      <div class="section">
-        <div class="section-title">🔄 Auto-Import from Zendesk</div>
-        
-        <!-- Date range selection -->
-        <div class="date-picker-group">
-          <div class="date-input-wrapper">
-            <label for="startDate">Start Date</label>
-            <input type="date" id="startDate" />
-          </div>
-          <div class="date-input-wrapper">
-            <label for="endDate">End Date</label>
-            <input type="date" id="endDate" />
-          </div>
+      <div class="date-picker-group">
+        <div class="date-input-wrapper">
+          <label for="startDate">Start Date</label>
+          <input type="date" id="startDate" />
         </div>
-        
-        <!-- Import button -->
-        <button id="autoImportBtn" class="primary-btn">
-          📥 Fetch & Import Tickets
-        </button>
-        
-        <!-- Progress indicator -->
-        <div class="progress-bar" id="autoImportProgress">
-          <div class="progress-fill" id="autoImportProgressFill">0%</div>
-        </div>
-        
-        <!-- Status messages -->
-        <div id="autoImportStatus" class="status-message"></div>
-        
-        <!-- Info box explaining the feature -->
-        <div class="info-box">
-          ℹ️ This will fetch all tickets between the selected dates, including their comments and metadata, then automatically import them into the knowledge base.
+
+        <div class="date-input-wrapper">
+          <label for="endDate">End Date</label>
+          <input type="date" id="endDate" />
         </div>
       </div>
 
-      <hr class="divider" />
+      <button id="autoImportBtn" class="primary-btn">
+        <span>📥</span>
+        <span>Fetch & Import Tickets</span>
+      </button>
 
-      <!-- ==================== MANUAL FILE UPLOAD SECTION ==================== -->
-      <div class="section">
-        <div class="section-title">📁 Manual Import (Upload File)</div>
-        
-        <!-- Drag & drop zone -->
-        <div class="file-upload-section" id="dropZone">
-          <div>
-            <p style="margin: 8px 0;">
-              Drop file here or <label for="fileInput" class="file-label">browse</label>
-            </p>
-            <input type="file" id="fileInput" accept=".txt,.md,.csv,.json" />
-            <div class="file-info">Supported: .txt, .md, .csv, .json (max 10MB)</div>
-          </div>
-        </div>
-
-        <!-- Upload progress indicator -->
-        <div class="progress-bar" id="fileUploadProgress">
-          <div class="progress-fill" id="fileUploadProgressFill">0%</div>
-        </div>
-        
-        <!-- Upload status messages -->
-        <div id="fileUploadStatus" class="status-message"></div>
+      <div class="progress-bar" id="autoImportProgress">
+        <div class="progress-fill" id="autoImportProgressFill">0%</div>
       </div>
+
+      <div id="autoImportStatus" class="status-message"></div>
     </div>
+
+    <!-- ==================== MANUAL FILE UPLOAD SECTION ==================== -->
+    <div class="section">
+      <div class="section-title">
+        <span>📁</span>
+        <span>Manual Import</span>
+      </div>
+
+      <div class="file-upload-section" id="dropZone">
+        <div class="upload-icon">📄</div>
+        <div>
+          <p style="margin: 8px 0; font-size: 13px;">
+            Drop file here or <label for="fileInput" class="file-label">browse</label>
+          </p>
+          <input type="file" id="fileInput" accept=".txt,.md,.csv,.json" />
+          <div class="file-info">Supported: .txt, .md, .csv, .json</div>
+        </div>
+      </div>
+
+      <div class="progress-bar" id="fileUploadProgress">
+        <div class="progress-fill" id="fileUploadProgressFill">0%</div>
+      </div>
+
+      <div id="fileUploadStatus" class="status-message"></div>
+    </div>
+
   </div>
 
   <script>
@@ -382,51 +379,18 @@
     // ============================================
 
     // ==================== INITIALIZATION ====================
-    // Initialize Zendesk App Framework client
     const client = ZAFClient.init();
 
     // ==================== DEFAULT DATE SETUP ====================
-    // Set default date range to last 30 days
     const today = new Date();
     const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
     document.getElementById('endDate').valueAsDate = today;
     document.getElementById('startDate').valueAsDate = thirtyDaysAgo;
 
-    // ==================== MODAL CONTROLS ====================
-    // Get DOM elements for modal control
-    const modal = document.getElementById('importerModal');
-    const modalOverlay = document.getElementById('modalOverlay');
-    const openBtn = document.getElementById('openImporterBtn');
-    const closeBtn = document.getElementById('closeModalBtn');
-
-    /**
-     * Opens the import modal
-     */
-    function openModal() {
-      modal.classList.add('active');
-      modalOverlay.classList.add('active');
-    }
-
-    /**
-     * Closes the import modal
-     */
-    function closeModal() {
-      modal.classList.remove('active');
-      modalOverlay.classList.remove('active');
-    }
-
-    // Attach event listeners
-    openBtn.addEventListener('click', openModal);
-    closeBtn.addEventListener('click', closeModal);
-    modalOverlay.addEventListener('click', closeModal);
-
     // Notify user that the app has loaded
     client.invoke("notify", "Ticket Importer loaded ✅", "notice");
 
     // ==================== BACKEND CONNECTIVITY CHECK ====================
-    /**
-     * Checks if the backend server is running and accessible
-     */
     async function checkBackendConnection() {
       try {
         const response = await fetch(`${BACKEND_URL}/health`, {
@@ -445,15 +409,10 @@
       }
     }
 
-    // Check connection on app load
     checkBackendConnection();
 
     // ==================== AUTO-IMPORT HANDLER ====================
-    /**
-     * Handles automatic ticket import from Zendesk within a date range
-     */
     document.getElementById("autoImportBtn").addEventListener("click", async () => {
-      // Get form elements
       const startDate = document.getElementById("startDate").value;
       const endDate = document.getElementById("endDate").value;
       const statusDiv = document.getElementById("autoImportStatus");
@@ -461,11 +420,9 @@
       const progressFill = document.getElementById("autoImportProgressFill");
       const btn = document.getElementById("autoImportBtn");
 
-      // Reset status display
       statusDiv.className = 'status-message';
       statusDiv.textContent = '';
 
-      // Validate date inputs
       if (!startDate || !endDate) {
         statusDiv.className = 'status-message error';
         statusDiv.textContent = "❌ Please select both start and end dates";
@@ -478,7 +435,6 @@
         return;
       }
 
-      // Disable button and show loading state
       btn.disabled = true;
       statusDiv.className = 'status-message loading';
       statusDiv.textContent = "🔄 Fetching tickets from Zendesk...";
@@ -487,7 +443,6 @@
       progressFill.textContent = '10%';
 
       try {
-        // Send import request to backend
         const response = await fetch(`${BACKEND_URL}/auto-import-tickets`, {
           method: 'POST',
           headers: {
@@ -500,36 +455,47 @@
           mode: 'cors'
         });
 
-        // Update progress
         progressFill.style.width = '50%';
         progressFill.textContent = '50%';
 
-        // Handle errors
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+          
+          // Handle duplicate import specifically
+          if (response.status === 409) {
+            statusDiv.className = 'status-message warning';
+            statusDiv.innerHTML = `
+              ⚠️ <strong>Duplicate Import Detected</strong><br><br>
+              Tickets from <strong>${startDate}</strong> to <strong>${endDate}</strong> were already imported:<br><br>
+              📅 Import Date: ${new Date(errorData.existingImport.importDate).toLocaleString()}<br>
+              📊 Tickets: ${errorData.existingImport.ticketsProcessed}<br>
+              📦 Chunks: ${errorData.existingImport.totalChunks}<br>
+              ⏱️ Time: ${errorData.existingImport.processingTime}<br><br>
+              💡 ${errorData.suggestion}
+            `;
+            progressDiv.classList.remove('active');
+            return;
+          }
+          
           throw new Error(errorData.error || `Server error: ${response.status}`);
         }
 
-        // Parse successful response
         const result = await response.json();
         
-        // Complete progress
         progressFill.style.width = '100%';
         progressFill.textContent = '100%';
 
-        // Display success message with statistics
         statusDiv.className = 'status-message success';
         statusDiv.innerHTML = `
-          ✅ Successfully imported!<br>
+          ✅ <strong>Successfully imported!</strong><br><br>
           📊 Tickets: ${result.ticketsProcessed}<br>
           📦 Chunks: ${result.totalChunks}<br>
-          ⏱️ Time: ${result.processingTime}
+          ⏱️ Time: ${result.processingTime}<br>
+          ${result.sunshineEvent?.created ? '✨ Sunshine Event logged' : ''}
         `;
 
-        // Show notification in Zendesk
         client.invoke("notify", `✅ Imported ${result.ticketsProcessed} tickets successfully!`, "notice");
 
-        // Hide progress bar after delay
         setTimeout(() => {
           progressDiv.classList.remove('active');
         }, 3000);
@@ -538,7 +504,6 @@
         console.error('❌ Auto-import error:', err);
         statusDiv.className = 'status-message error';
         
-        // Provide helpful error messages
         if (err.message === 'Failed to fetch') {
           statusDiv.textContent = `❌ Cannot connect to server. Make sure the backend is running on ${BACKEND_URL}`;
         } else {
@@ -548,41 +513,79 @@
         progressDiv.classList.remove('active');
         client.invoke("notify", "❌ Import failed. Check console for details.", "error");
       } finally {
-        // Re-enable button
+        btn.disabled = false;
+      }
+    });
+
+    // ==================== IMPORT HISTORY HANDLER ====================
+    document.getElementById("loadHistoryBtn").addEventListener("click", async () => {
+      const historyContainer = document.getElementById("historyContainer");
+      const historyList = document.getElementById("historyList");
+      const btn = document.getElementById("loadHistoryBtn");
+
+      historyContainer.className = 'status-message loading';
+      historyContainer.textContent = '🔄 Loading import history...';
+      historyList.innerHTML = '';
+      btn.disabled = true;
+
+      try {
+        const response = await fetch(`${BACKEND_URL}/import-history`, {
+          method: 'GET',
+          mode: 'cors'
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status}`);
+        }
+
+        const result = await response.json();
+        
+        historyContainer.className = 'status-message';
+        historyContainer.textContent = '';
+
+        if (result.imports && result.imports.length > 0) {
+          historyList.innerHTML = result.imports.map(item => `
+            <div class="history-item">
+              <div class="history-date">
+                📅 ${new Date(item.importDate).toLocaleString()}
+              </div>
+              <div class="history-stats">
+                📊 Date Range: ${item.dateRange.start} to ${item.dateRange.end}<br>
+                🎫 Tickets: ${item.ticketsProcessed} | 📦 Chunks: ${item.totalChunks} | ⏱️ ${item.processingTime}
+              </div>
+            </div>
+          `).join('');
+        } else {
+          historyList.innerHTML = '<div class="no-history">📭 No import history found</div>';
+        }
+
+      } catch (err) {
+        console.error('❌ History error:', err);
+        historyContainer.className = 'status-message error';
+        historyContainer.textContent = `❌ Failed to load history: ${err.message}`;
+      } finally {
         btn.disabled = false;
       }
     });
 
     // ==================== FILE UPLOAD HANDLER ====================
-    // Get file upload DOM elements
     const fileInput = document.getElementById('fileInput');
     const dropZone = document.getElementById('dropZone');
     const fileUploadStatus = document.getElementById('fileUploadStatus');
     const fileUploadProgress = document.getElementById('fileUploadProgress');
     const fileUploadProgressFill = document.getElementById('fileUploadProgressFill');
 
-    // Attach file input change listener
     fileInput.addEventListener('change', handleFileUpload);
 
-    // ==================== DRAG & DROP HANDLERS ====================
-    /**
-     * Handle drag over event - show visual feedback
-     */
     dropZone.addEventListener('dragover', (e) => {
       e.preventDefault();
       dropZone.classList.add('dragover');
     });
 
-    /**
-     * Handle drag leave event - remove visual feedback
-     */
     dropZone.addEventListener('dragleave', () => {
       dropZone.classList.remove('dragover');
     });
 
-    /**
-     * Handle drop event - process dropped files
-     */
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       dropZone.classList.remove('dragover');
@@ -594,21 +597,16 @@
       }
     });
 
-    /**
-     * Handle click on drop zone - trigger file browser
-     */
-    dropZone.addEventListener('click', () => {
-      fileInput.click();
+    dropZone.addEventListener('click', (e) => {
+      if (e.target.tagName !== 'LABEL') {
+        fileInput.click();
+      }
     });
 
-    /**
-     * Handles file upload to backend server
-     */
     async function handleFileUpload() {
       const file = fileInput.files[0];
       if (!file) return;
 
-      // Show loading state
       fileUploadStatus.className = 'status-message loading';
       fileUploadStatus.textContent = `⏳ Uploading ${file.name}...`;
       fileUploadProgress.classList.add('active');
@@ -616,41 +614,33 @@
       fileUploadProgressFill.textContent = '30%';
 
       try {
-        // Prepare form data
         const formData = new FormData();
         formData.append('file', file);
 
-        // Update progress
         fileUploadProgressFill.style.width = '60%';
         fileUploadProgressFill.textContent = '60%';
 
-        // Send file to backend
         const response = await fetch(`${BACKEND_URL}/import-file`, {
           method: 'POST',
           body: formData,
           mode: 'cors'
         });
 
-        // Handle errors
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
           throw new Error(errorData.error || errorData.details || `Server error: ${response.status}`);
         }
 
-        // Parse response
         const result = await response.json();
 
-        // Complete progress
         fileUploadProgressFill.style.width = '100%';
         fileUploadProgressFill.textContent = '100%';
 
-        // Display success message
         fileUploadStatus.className = 'status-message success';
         
-        // Show different messages based on file type
         if (result.type === 'tickets') {
           fileUploadStatus.innerHTML = `
-            ✅ Successfully imported: ${result.fileName}<br>
+            ✅ <strong>Successfully imported:</strong> ${result.fileName}<br><br>
             📊 Tickets: ${result.ticketsProcessed}<br>
             📦 Chunks: ${result.totalChunks}
           `;
@@ -658,10 +648,8 @@
           fileUploadStatus.textContent = `✅ Successfully imported: ${result.fileName}`;
         }
 
-        // Show notification
         client.invoke("notify", `✅ File imported: ${result.fileName}`, "notice");
 
-        // Hide progress bar after delay
         setTimeout(() => {
           fileUploadProgress.classList.remove('active');
         }, 3000);
@@ -670,7 +658,6 @@
         console.error('❌ Upload error:', err);
         fileUploadStatus.className = 'status-message error';
         
-        // Provide helpful error messages
         if (err.message === 'Failed to fetch') {
           fileUploadStatus.textContent = `❌ Cannot connect to server. Make sure the backend is running`;
         } else {
@@ -680,14 +667,12 @@
         fileUploadProgress.classList.remove('active');
         client.invoke("notify", "❌ Upload failed", "error");
       } finally {
-        // Clear file input for next upload
         fileInput.value = '';
       }
     }
 
     // ==================== APP INITIALIZATION ====================
-    // Set app dimensions for Zendesk navbar
-    client.invoke('resize', { width: '100%', height: '40px' });
+    client.invoke('resize', { width: '100%', height: '100%' });
   </script>
 </body>
 </html>
