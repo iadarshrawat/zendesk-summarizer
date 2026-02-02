@@ -79,6 +79,123 @@ export async function fetchTicketsByDateRange(startDate, endDate) {
 }
 
 /**
+ * Cache for form fields (to avoid redundant API calls)
+ */
+let formFieldsCache = null;
+
+/**
+ * Fetch all ticket form fields
+ */
+export async function fetchFormFields() {
+  // Return cached fields if available
+  if (formFieldsCache) {
+    console.log(`📋 Using cached form fields (${Object.keys(formFieldsCache).length} fields)`);
+    return formFieldsCache;
+  }
+
+  const zendeskClient = createZendeskClient();
+  const fieldsMap = {};
+  
+  try {
+    console.log(`📋 Fetching ticket form fields...`);
+    
+    let nextUrl = '/ticket_fields.json';
+    let page = 1;
+    let totalFields = 0;
+    
+    while (nextUrl) {
+      try {
+        const response = await zendeskClient.get(nextUrl);
+        const fields = response.data.ticket_fields || [];
+        
+        // Map field ID to field details (id, title, type, description)
+        for (const field of fields) {
+          fieldsMap[field.id] = {
+            id: field.id,
+            title: field.title,
+            type: field.type,
+            description: field.description || '',
+            system: field.system,
+            key: field.key || ''
+          };
+        }
+        
+        totalFields += fields.length;
+        console.log(`   ✓ Fetched ${fields.length} fields on page ${page}`);
+        
+        nextUrl = response.data.next_page || null;
+        page++;
+        
+        if (nextUrl) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (err) {
+        console.error(`❌ Error fetching page ${page}:`, err.message);
+        break;
+      }
+    }
+    
+    console.log(`✅ Total form fields fetched: ${totalFields}`);
+    
+    // Cache the results
+    formFieldsCache = fieldsMap;
+    return fieldsMap;
+  } catch (err) {
+    console.error(`❌ Error fetching form fields:`, err.message);
+    return {};
+  }
+}
+
+/**
+ * Get field name by ID
+ */
+export function getFieldNameById(fieldId, fieldsMap) {
+  if (!fieldsMap || !fieldsMap[fieldId]) {
+    return `Unknown Field (${fieldId})`;
+  }
+  return fieldsMap[fieldId].title;
+}
+
+/**
+ * Map ticket custom fields to human-readable format
+ */
+export function mapTicketCustomFields(ticket, fieldsMap) {
+  if (!ticket.custom_fields || !Array.isArray(ticket.custom_fields)) {
+    return {};
+  }
+  
+  const mappedFields = {};
+  
+  for (const field of ticket.custom_fields) {
+    const fieldId = field.id;
+    const fieldValue = field.value;
+    
+    if (fieldValue === null || fieldValue === '') {
+      continue; // Skip empty fields
+    }
+    
+    const fieldInfo = fieldsMap[fieldId];
+    if (fieldInfo) {
+      mappedFields[fieldInfo.title] = {
+        value: fieldValue,
+        type: fieldInfo.type,
+        key: fieldInfo.key,
+        description: fieldInfo.description
+      };
+    } else {
+      mappedFields[`Field_${fieldId}`] = {
+        value: fieldValue,
+        type: 'unknown',
+        key: '',
+        description: ''
+      };
+    }
+  }
+  
+  return mappedFields;
+}
+
+/**
  * Fetch ticket comments
  */
 export async function fetchTicketComments(ticketId) {
@@ -94,9 +211,9 @@ export async function fetchTicketComments(ticketId) {
 }
 
 /**
- * Enrich ticket with comments
+ * Enrich ticket with comments and form fields
  */
-export async function enrichTicketWithComments(ticket) {
+export async function enrichTicketWithComments(ticket, fieldsMap = null) {
   const comments = await fetchTicketComments(ticket.id);
   
   const conversation = comments.map(comment => ({
@@ -111,6 +228,11 @@ export async function enrichTicketWithComments(ticket) {
     ? agentComments[agentComments.length - 1].message 
     : null;
   
+  // Map custom fields if fieldsMap is provided
+  const customFields = fieldsMap 
+    ? mapTicketCustomFields(ticket, fieldsMap)
+    : {};
+  
   return {
     ticket_id: ticket.id,
     subject: ticket.subject || '',
@@ -121,7 +243,10 @@ export async function enrichTicketWithComments(ticket) {
     created_at: ticket.created_at,
     updated_at: ticket.updated_at,
     conversation: conversation,
-    resolution: resolution
+    resolution: resolution,
+    custom_fields: customFields,
+    requester_id: ticket.requester_id,
+    assignee_id: ticket.assignee_id
   };
 }
 
@@ -138,33 +263,31 @@ export async function createCustomObjectType() {
     try {
       const getResponse = await zendeskClient.get(`/custom_objects/${objectKey}`);
       console.log(`✅ Custom object '${objectKey}' already exists`);
-      return true;
     } catch (err) {
       if (err.response?.status !== 404) {
         throw err;
       }
       console.log(`📝 Custom object not found, creating new...`);
+      
+      await zendeskClient.post('/custom_objects', {
+        custom_object: {
+          key: objectKey,
+          title: 'KB Import Records',
+          title_pluralized: 'KB Import Records',
+          description: 'Tracks knowledge base import history',
+          raw_title: 'KB Import Records',
+          raw_title_pluralized: 'KB Import Records',
+          raw_description: 'Tracks knowledge base import history'
+        }
+      });
+      
+      console.log(`✅ Custom object created successfully`);
     }
-    
-    const createResponse = await zendeskClient.post('/custom_objects', {
-      custom_object: {
-        key: objectKey,
-        title: 'KB Import Records',
-        title_pluralized: 'KB Import Records',
-        description: 'Tracks knowledge base import history',
-        raw_title: 'KB Import Records',
-        raw_title_pluralized: 'KB Import Records',
-        raw_description: 'Tracks knowledge base import history'
-      }
-    });
-    
-    console.log(`✅ Custom object created successfully`);
     
     const fieldsToCreate = [
       { key: 'import_date', type: 'date', title: 'Import Date' },
       { key: 'start_date', type: 'date', title: 'Start Date' },
       { key: 'end_date', type: 'date', title: 'End Date' },
-      { key: 'status', type: 'text', title: 'Status' },
       { key: 'ticket_count', type: 'integer', title: 'Ticket Count' },
       { key: 'source', type: 'text', title: 'Source' }
     ];
@@ -198,6 +321,77 @@ export async function createCustomObjectType() {
 }
 
 /**
+ * Create custom object type for import errors
+ */
+export async function createErrorCustomObjectType() {
+  try {
+    const zendeskClient = createZendeskClient();
+    
+    const objectKey = 'kb_import_errors';
+    console.log(`🔧 Checking if error custom object '${objectKey}' exists...`);
+    
+    try {
+      const getResponse = await zendeskClient.get(`/custom_objects/${objectKey}`);
+      console.log(`✅ Error custom object '${objectKey}' already exists`);
+    } catch (err) {
+      if (err.response?.status !== 404) {
+        throw err;
+      }
+      console.log(`📝 Error custom object not found, creating new...`);
+      
+      await zendeskClient.post('/custom_objects', {
+        custom_object: {
+          key: objectKey,
+          title: 'KB Import Errors',
+          title_pluralized: 'KB Import Errors',
+          description: 'Tracks knowledge base import errors',
+          raw_title: 'KB Import Errors',
+          raw_title_pluralized: 'KB Import Errors',
+          raw_description: 'Tracks knowledge base import errors'
+        }
+      });
+      
+      console.log(`✅ Error custom object created successfully`);
+    }
+    
+    const fieldsToCreate = [
+      { key: 'error_date', type: 'date', title: 'Error Date' },
+      { key: 'start_date', type: 'date', title: 'Start Date' },
+      { key: 'end_date', type: 'date', title: 'End Date' },
+      { key: 'error_message', type: 'text', title: 'Error Message' },
+      { key: 'error_details', type: 'text', title: 'Error Details' },
+      { key: 'source', type: 'text', title: 'Source' }
+    ];
+    
+    console.log(`🔧 Creating error custom fields...`);
+    for (const field of fieldsToCreate) {
+      try {
+        await zendeskClient.post(`/custom_objects/${objectKey}/fields`, {
+          custom_object_field: {
+            key: field.key,
+            type: field.type,
+            title: field.title,
+            raw_title: field.title
+          }
+        });
+        console.log(`   ✅ Created field: ${field.key}`);
+      } catch (fieldErr) {
+        if (fieldErr.response?.status === 422) {
+          console.log(`   ℹ️  Field ${field.key} already exists`);
+        } else {
+          console.warn(`   ⚠️ Could not create field ${field.key}:`, fieldErr.response?.data?.error || fieldErr.message);
+        }
+      }
+    }
+    
+    return true;
+  } catch (err) {
+    console.warn(`⚠️ Could not create error custom object:`, err.message);
+    return false;
+  }
+}
+
+/**
  * Create import record in Zendesk
  */
 export async function createZendeskImportRecord(importData = {}) {
@@ -206,13 +400,12 @@ export async function createZendeskImportRecord(importData = {}) {
     const {
       startDate,
       endDate,
-      status = 'success',
       ticketCount = 0,
       source = 'auto_import'
     } = importData;
 
     const today = new Date().toISOString().split('T')[0];
-    const recordName = `Import ${today} | ${startDate} to ${endDate} | ${status} | ${ticketCount} tickets | ${source}`;
+    const recordName = `Import ${today} | ${startDate} to ${endDate} | ${ticketCount} tickets | ${source}`;
 
     console.log(`📝 Creating import record in Zendesk...`);
 
@@ -238,7 +431,6 @@ export async function createZendeskImportRecord(importData = {}) {
           import_date: today,
           start_date: startDate,
           end_date: endDate,
-          status: status,
           ticket_count: ticketCount,
           source: source
         }
@@ -260,6 +452,71 @@ export async function createZendeskImportRecord(importData = {}) {
 }
 
 /**
+ * Create import record in Zendesk
+ */
+/**
+ * Create error record in Zendesk
+ */
+export async function createZendeskErrorImportRecord(errorData = {}) {
+  try {
+    const zendeskClient = createZendeskClient();
+    const {
+      startDate = 'N/A',
+      endDate = 'N/A',
+      errorMessage = 'Unknown error',
+      errorDetails = '',
+      source = 'auto_import'
+    } = errorData;
+
+    const today = new Date().toISOString().split('T')[0];
+    const recordName = `Error ${today} | ${startDate} to ${endDate} | ${errorMessage.substring(0, 50)}`;
+
+    console.log(`📝 Creating error record in Zendesk...`);
+
+    // Step 1: Create the record with just the name
+    const recordPayload = {
+      custom_object_record: {
+        name: recordName
+      }
+    };
+
+    const createResponse = await zendeskClient.post(
+      '/custom_objects/kb_import_errors/records',
+      recordPayload
+    );
+
+    const recordId = createResponse.data.custom_object_record?.id;
+    console.log(`✅ Error record created with ID: ${recordId}`);
+
+    // Step 2: Update the record with custom field values
+    const updatePayload = {
+      custom_object_record: {
+        custom_object_fields: {
+          error_date: today,
+          start_date: startDate,
+          end_date: endDate,
+          error_message: errorMessage,
+          error_details: errorDetails,
+          source: source
+        }
+      }
+    };
+
+    const updateResponse = await zendeskClient.patch(
+      `/custom_objects/kb_import_errors/records/${recordId}`,
+      updatePayload
+    );
+
+    console.log(`✅ Error custom fields populated successfully`);
+    return updateResponse.data.custom_object_record;
+
+  } catch (err) {
+    console.warn(`⚠️ Could not create error record:`, err.message);
+    return null;
+  }
+}
+
+/**
  * Get import records
  */
 export async function getImportRecords(limit = 100) {
@@ -273,6 +530,24 @@ export async function getImportRecords(limit = 100) {
     return response.data.custom_object_records || [];
   } catch (err) {
     console.warn(`⚠️ Could not fetch import records:`, err.message);
+    return [];
+  }
+}
+
+/**
+ * Get error records
+ */
+export async function getErrorRecords(limit = 100) {
+  try {
+    const zendeskClient = createZendeskClient();
+    
+    const response = await zendeskClient.get(
+      `/custom_object_records?custom_object_key=kb_import_errors&per_page=${limit}`
+    );
+    
+    return response.data.custom_object_records || [];
+  } catch (err) {
+    console.warn(`⚠️ Could not fetch error records:`, err.message);
     return [];
   }
 }

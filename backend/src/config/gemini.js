@@ -33,7 +33,24 @@ export function getGeminiModel(
  * Get embedding model
  */
 export function getEmbeddingModel() {
-  return genAI.getGenerativeModel({ model: "text-embedding-004" });
+  // Google's embedding model uses a different API
+  // The correct model name is "embedding-001" or we need to use generateContent with a special format
+  return genAI.getGenerativeModel({ model: "embedding-001" });
+}
+
+/**
+ * List available models (for debugging)
+ */
+export async function listAvailableModels() {
+  try {
+    const response = await genAI.listModels();
+    console.log("📋 Available models:");
+    for await (const model of response) {
+      console.log(`   - ${model.name}: ${model.displayName}`);
+    }
+  } catch (error) {
+    console.error("❌ Could not list models:", error.message);
+  }
 }
 
 /**

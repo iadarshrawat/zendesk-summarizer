@@ -6,6 +6,16 @@
 export function chunkTicketData(ticket) {
   const chunks = [];
   
+  // Build custom fields text if available
+  let customFieldsText = '';
+  if (ticket.custom_fields && Object.keys(ticket.custom_fields).length > 0) {
+    const fieldLines = Object.entries(ticket.custom_fields).map(([name, data]) => {
+      const value = typeof data === 'object' ? data.value : data;
+      return `${name}: ${value}`;
+    });
+    customFieldsText = '\nCustom Fields:\n' + fieldLines.join('\n');
+  }
+  
   // Main ticket overview chunk
   const mainContent = `
 Ticket ID: ${ticket.ticket_id}
@@ -13,7 +23,7 @@ Subject: ${ticket.subject}
 Description: ${ticket.description || 'N/A'}
 Status: ${ticket.status}
 Priority: ${ticket.priority}
-Tags: ${ticket.tags?.join(', ') || 'None'}
+Tags: ${ticket.tags?.join(', ') || 'None'}${customFieldsText}
 `.trim();
   
   chunks.push({
@@ -22,7 +32,8 @@ Tags: ${ticket.tags?.join(', ') || 'None'}
       type: 'ticket_overview',
       ticket_id: ticket.ticket_id,
       subject: ticket.subject,
-      tags: ticket.tags?.join(', ') || ''
+      tags: ticket.tags?.join(', ') || '',
+      has_custom_fields: Object.keys(ticket.custom_fields || {}).length > 0
     }
   });
   
@@ -58,6 +69,27 @@ Related Tags: ${ticket.tags?.join(', ') || 'None'}
         ticket_id: ticket.ticket_id,
         subject: ticket.subject,
         tags: ticket.tags?.join(', ') || ''
+      }
+    });
+  }
+  
+  // Custom fields chunk (if any custom fields exist)
+  if (ticket.custom_fields && Object.keys(ticket.custom_fields).length > 0) {
+    const fieldsText = Object.entries(ticket.custom_fields)
+      .map(([name, data]) => {
+        const value = typeof data === 'object' ? data.value : data;
+        const type = typeof data === 'object' ? ` (${data.type})` : '';
+        return `${name}${type}: ${value}`;
+      })
+      .join('\n');
+    
+    chunks.push({
+      text: `Ticket ${ticket.ticket_id} Form Fields:\n\n${fieldsText}`,
+      metadata: {
+        type: 'custom_fields',
+        ticket_id: ticket.ticket_id,
+        subject: ticket.subject,
+        field_count: Object.keys(ticket.custom_fields).length
       }
     });
   }

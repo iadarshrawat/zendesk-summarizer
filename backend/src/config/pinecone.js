@@ -9,7 +9,7 @@ if (!process.env.PINECONE_API_KEY) {
 }
 
 const INDEX_NAME = "zendesk-kb";
-const DIMENSION = 768;
+const DIMENSION = 3072; // gemini-embedding-001 produces 3072-dimensional vectors
 
 const pc = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY,

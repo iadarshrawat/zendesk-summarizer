@@ -1,7 +1,9 @@
 import { 
   fetchTicketsByDateRange, 
   enrichTicketWithComments, 
-  createZendeskImportRecord 
+  createZendeskImportRecord, 
+  createZendeskErrorImportRecord,
+  fetchFormFields
 } from "../config/zendesk.js";
 import { upsertVectors, resetKnowledgeBase, getIndexStats } from "../config/pinecone.js";
 import { embedText } from "../services/embedding.js";
@@ -24,13 +26,17 @@ export async function autoImportTickets(req, res) {
     
     console.log(`\n🚀 Starting auto-import for ${startDate} to ${endDate}`);
     
+    // Fetch form fields first (with caching)
+    console.log(`📋 Fetching form field mappings...`);
+    const fieldsMap = await fetchFormFields();
+    console.log(`✅ Form fields loaded: ${Object.keys(fieldsMap).length} fields available`);
+    
     const tickets = await fetchTicketsByDateRange(startDate, endDate);
     
     // Create import record regardless of ticket count
     const customRecord = await createZendeskImportRecord({
       startDate: startDate,
       endDate: endDate,
-      status: tickets.length > 0 ? 'success' : 'no_tickets_found',
       ticketCount: tickets.length,
       source: 'auto_import'
     });
@@ -52,11 +58,11 @@ export async function autoImportTickets(req, res) {
     
     console.log(`\n📊 Processing ${tickets.length} tickets...`);
     
-    // Enrich tickets with comments
+    // Enrich tickets with comments and custom fields
     const enrichedTickets = [];
     for (let i = 0; i < tickets.length; i++) {
       console.log(`🔄 Enriching ticket ${i + 1}/${tickets.length} (ID: ${tickets[i].id})`);
-      const enriched = await enrichTicketWithComments(tickets[i]);
+      const enriched = await enrichTicketWithComments(tickets[i], fieldsMap);
       enrichedTickets.push(enriched);
       
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -91,6 +97,8 @@ export async function autoImportTickets(req, res) {
         totalChunks++;
       }
     }
+
+    // throw new Error("Simulated error for testing error handling");
     
     console.log(`\n📤 Uploading ${vectors.length} vectors to Pinecone...`);
     await upsertVectors(vectors);
@@ -115,15 +123,19 @@ export async function autoImportTickets(req, res) {
   } catch (err) {
     console.error("❌ Auto-import error:", err);
     
-    await createZendeskImportRecord({
-      status: 'failed',
-      ticketCount: 0,
+    // Create error record in separate object
+    const errorRecord = await createZendeskErrorImportRecord({
+      startDate: req.body?.startDate || 'N/A',
+      endDate: req.body?.endDate || 'N/A',
+      errorMessage: err.message,
+      errorDetails: err.stack || err.toString(),
       source: 'auto_import'
     });
     
     res.status(500).json({ 
       error: "Auto-import failed", 
-      details: err.message 
+      details: err.message,
+      zendeskErrorRecordId: errorRecord?.id || null
     });
   }
 }
@@ -184,8 +196,9 @@ export async function importFile(req, res) {
       console.log(`📤 Uploading ${vectors.length} vectors to Pinecone...`);
       await upsertVectors(vectors);
       
-      await createZendeskImportRecord({
-        status: 'success',
+      const customRecord = await createZendeskImportRecord({
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date().toISOString().split('T')[0],
         ticketCount: tickets.length,
         source: 'file_import'
       });
@@ -197,7 +210,8 @@ export async function importFile(req, res) {
         fileName: fileName,
         type: "tickets",
         ticketsProcessed: tickets.length,
-        totalChunks: totalChunks
+        totalChunks: totalChunks,
+        zendeskRecordId: customRecord?.id || null
       });
       
     } else {
@@ -221,8 +235,9 @@ export async function importFile(req, res) {
       
       await upsertVectors(vectors);
       
-      await createZendeskImportRecord({
-        status: 'success',
+      const customRecord = await createZendeskImportRecord({
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date().toISOString().split('T')[0],
         ticketCount: 0,
         source: 'file_import'
       });
@@ -231,15 +246,27 @@ export async function importFile(req, res) {
         status: "File imported successfully",
         fileName: fileName,
         type: "text",
-        chunks: chunks.length
+        chunks: chunks.length,
+        zendeskRecordId: customRecord?.id || null
       });
     }
 
   } catch (err) {
     console.error("❌ File import error:", err);
+
+    // Create error record in separate object
+    const errorRecord = await createZendeskErrorImportRecord({
+      startDate: 'N/A',
+      endDate: 'N/A',
+      errorMessage: err.message,
+      errorDetails: err.stack || err.toString(),
+      source: 'file_import'
+    });
+
     res.status(500).json({ 
       error: "File import failed", 
-      details: err.message
+      details: err.message,
+      zendeskErrorRecordId: errorRecord?.id || null
     });
   } finally {
     cleanupFile(filePath);
