@@ -1,3 +1,4 @@
+import PQueue from 'p-queue';
 import { 
   fetchTicketsByDateRange, 
   enrichTicketWithComments, 
@@ -9,6 +10,22 @@ import { upsertVectors, resetKnowledgeBase, getIndexStats } from "../config/pine
 import { embedText } from "../services/embedding.js";
 import { chunkTicketData, extractTicketsFromJSON } from "../services/chunking.js";
 import { extractTextFromFile, cleanupFile } from "../services/fileProcessor.js";
+
+// Initialize queue for parallel processing
+// concurrency: 3 = max 3 tickets at a time (respects API rate limits)
+// interval: 1000 = per 1 second
+// intervalCap: 3 = max 3 tasks per second
+const enrichmentQueue = new PQueue({
+  concurrency: 3,
+  interval: 1000,
+  intervalCap: 3
+});
+
+const embeddingQueue = new PQueue({
+  concurrency: 5,
+  interval: 1000,
+  intervalCap: 10
+});
 
 
 /**
@@ -58,45 +75,91 @@ export async function autoImportTickets(req, res) {
     
     console.log(`\n📊 Processing ${tickets.length} tickets...`);
     
-    // Enrich tickets with comments and custom fields
+    // Enrich tickets with comments and custom fields (PARALLEL)
+    console.log(`⚡ Using parallel processing (max 3 concurrent enrichments)`);
     const enrichedTickets = [];
-    for (let i = 0; i < tickets.length; i++) {
-      console.log(`🔄 Enriching ticket ${i + 1}/${tickets.length} (ID: ${tickets[i].id})`);
-      const enriched = await enrichTicketWithComments(tickets[i], fieldsMap);
-      enrichedTickets.push(enriched);
-      
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+    let enrichmentProgress = 0;
+    
+    const enrichmentResults = await Promise.allSettled(
+      tickets.map((ticket, index) =>
+        enrichmentQueue.add(async () => {
+          enrichmentProgress++;
+          console.log(`🔄 Enriching ticket ${enrichmentProgress}/${tickets.length} (ID: ${ticket.id})`);
+          const enriched = await enrichTicketWithComments(ticket, fieldsMap);
+          return enriched;
+        })
+      )
+    );
+    
+    // Process results and log any failures
+    enrichmentResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        enrichedTickets.push(result.value);
+      } else {
+        console.error(`❌ Failed to enrich ticket ${index}:`, result.reason.message);
+      }
+    });
+    
+    console.log(`✅ Enriched ${enrichedTickets.length}/${tickets.length} tickets successfully`);
     
     console.log(`\n📦 Creating chunks and embeddings...`);
     const vectors = [];
     const timestamp = Date.now();
     let totalChunks = 0;
     
+    // First, create all chunks (sequential, fast)
+    const allChunks = [];
     for (const ticket of enrichedTickets) {
       const chunks = chunkTicketData(ticket);
       console.log(`📦 Created ${chunks.length} chunks for ticket ${ticket.ticket_id}`);
       
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        const embedding = await embedText(chunk.text);
-        
+      allChunks.push(...chunks.map((chunk, i) => ({
+        chunk,
+        ticketId: ticket.ticket_id,
+        chunkIndex: i
+      })));
+    }
+    
+    console.log(`⚡ Generating embeddings for ${allChunks.length} chunks in parallel (max 5 concurrent)...`);
+    
+    // Generate embeddings in parallel
+    let embeddingProgress = 0;
+    const embeddingResults = await Promise.allSettled(
+      allChunks.map(({ chunk, ticketId, chunkIndex }) =>
+        embeddingQueue.add(async () => {
+          embeddingProgress++;
+          if (embeddingProgress % 5 === 0) {
+            console.log(`⏳ Embedding progress: ${embeddingProgress}/${allChunks.length} chunks`);
+          }
+          const embedding = await embedText(chunk.text);
+          return { embedding, chunk, ticketId, chunkIndex };
+        })
+      )
+    );
+    
+    // Process embedding results
+    embeddingResults.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        const { embedding, chunk, ticketId, chunkIndex } = result.value;
         vectors.push({
-          id: `auto-ticket-${ticket.ticket_id}-chunk-${i}-${timestamp}`,
+          id: `auto-ticket-${ticketId}-chunk-${chunkIndex}-${timestamp}`,
           values: embedding,
           metadata: {
             ...chunk.metadata,
             content: chunk.text,
             source: 'auto_import',
             importDate: new Date().toISOString(),
-            created_at: ticket.created_at,
-            updated_at: ticket.updated_at
+            created_at: chunk.metadata?.created_at,
+            updated_at: chunk.metadata?.updated_at
           }
         });
-        
         totalChunks++;
+      } else {
+        console.error(`❌ Failed to generate embedding:`, result.reason.message);
       }
-    }
+    });
+    
+    console.log(`✅ Generated embeddings for ${totalChunks}/${allChunks.length} chunks`);
 
     // throw new Error("Simulated error for testing error handling");
     
@@ -167,18 +230,44 @@ export async function importFile(req, res) {
       const tickets = extractTicketsFromJSON(fileData.data);
       console.log(`🎫 Found ${tickets.length} tickets in JSON`);
       
-      const vectors = [];
-      
+      // Create all chunks first
+      const allChunks = [];
       for (const ticket of tickets) {
         const chunks = chunkTicketData(ticket);
         console.log(`📦 Created ${chunks.length} chunks for ticket ${ticket.ticket_id}`);
         
-        for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i];
-          const embedding = await embedText(chunk.text);
-          
+        allChunks.push(...chunks.map((chunk, i) => ({
+          chunk,
+          ticketId: ticket.ticket_id,
+          chunkIndex: i
+        })));
+      }
+      
+      console.log(`⚡ Generating embeddings for ${allChunks.length} chunks in parallel...`);
+      
+      // Generate embeddings in parallel
+      let embeddingProgress = 0;
+      const embeddingResults = await Promise.allSettled(
+        allChunks.map(({ chunk, ticketId, chunkIndex }) =>
+          embeddingQueue.add(async () => {
+            embeddingProgress++;
+            if (embeddingProgress % 5 === 0) {
+              console.log(`⏳ Embedding progress: ${embeddingProgress}/${allChunks.length}`);
+            }
+            const embedding = await embedText(chunk.text);
+            return { embedding, chunk, ticketId, chunkIndex };
+          })
+        )
+      );
+      
+      const vectors = [];
+      let successCount = 0;
+      
+      embeddingResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          const { embedding, chunk, ticketId, chunkIndex } = result.value;
           vectors.push({
-            id: `ticket-${ticket.ticket_id}-chunk-${i}-${timestamp}`,
+            id: `ticket-${ticketId}-chunk-${chunkIndex}-${timestamp}`,
             values: embedding,
             metadata: {
               ...chunk.metadata,
@@ -188,10 +277,14 @@ export async function importFile(req, res) {
               uploadedAt: new Date().toISOString()
             }
           });
-          
-          totalChunks++;
+          successCount++;
+        } else {
+          console.error(`❌ Failed embedding:`, result.reason.message);
         }
-      }
+      });
+      
+      totalChunks = successCount;
+      console.log(`✅ Generated ${successCount}/${allChunks.length} embeddings`);
       
       console.log(`📤 Uploading ${vectors.length} vectors to Pinecone...`);
       await upsertVectors(vectors);
@@ -288,31 +381,51 @@ export async function ingestKB(req, res) {
     }
 
     console.log(`📚 Processing ${articles.length} articles...`);
+    console.log(`⚡ Generating embeddings in parallel (max 5 concurrent)...`);
 
     const vectors = [];
     let totalIngested = 0;
+    
+    // Generate embeddings in parallel
+    const embeddingResults = await Promise.allSettled(
+      articles.map((article, index) =>
+        embeddingQueue.add(async () => {
+          const cleanText = article.content.replace(/<[^>]+>/g, "").slice(0, 2000);
+          const embedding = await embedText(cleanText);
+          
+          if ((index + 1) % 5 === 0) {
+            console.log(`⏳ Progress: ${index + 1}/${articles.length} articles`);
+          }
+          
+          return { embedding, article, cleanText };
+        })
+      )
+    );
+    
+    // Process results
+    embeddingResults.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        const { embedding, article, cleanText } = result.value;
+        vectors.push({
+          id: `article-${article.id}`,
+          values: embedding,
+          metadata: {
+            title: article.title,
+            content: cleanText,
+          },
+        });
+        totalIngested++;
+      } else {
+        console.error(`❌ Failed to ingest article:`, result.reason.message);
+      }
+    });
 
-    for (const article of articles) {
-      const cleanText = article.content.replace(/<[^>]+>/g, "").slice(0, 2000);
-      const embedding = await embedText(cleanText);
-
-      vectors.push({
-        id: `article-${article.id}`,
-        values: embedding,
-        metadata: {
-          title: article.title,
-          content: cleanText,
-        },
-      });
-      
-      totalIngested++;
-      console.log(`✅ Processed ${totalIngested}/${articles.length} articles`);
-    }
-
+    console.log(`✅ Generated embeddings for ${totalIngested}/${articles.length} articles`);
+    
     await upsertVectors(vectors);
 
-    console.log(`✅ Successfully ingested all ${articles.length} articles into Pinecone`);
-    res.json({ status: "KB ingested successfully", count: articles.length });
+    console.log(`✅ Successfully ingested all ${totalIngested} articles into Pinecone`);
+    res.json({ status: "KB ingested successfully", count: totalIngested });
   } catch (err) {
     console.error("❌ KB ingestion error:", err);
     res.status(500).json({ error: "KB ingestion failed", details: err.message });
