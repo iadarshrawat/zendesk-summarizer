@@ -27,11 +27,9 @@ export async function composeReply(req, res) {
       .filter(Boolean)
       .join("\n\n") || "No relevant knowledge base found.";
 
-    // Build prompt
     const prompt = buildReplyPrompt(ticket, ticket.tone || "professional", kbChunks);
     console.log("📝 Generating reply for ticket:", ticket.ticketId);
 
-    // Generate reply
     const replyText = await generateContent(prompt, {
       temperature: 0.7,
       topP: 0.8,

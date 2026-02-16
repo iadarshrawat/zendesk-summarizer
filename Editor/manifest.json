@@ -1,0 +1,22 @@
+{
+  "name": "AI Reply Composer",
+  "author": {
+    "name": "adarsh",
+    "email": "talkwithadarsh@gmail.com"
+  },
+  "permissions": {
+    "tickets": "write"
+  },
+  "defaultLocale": "en",
+  "private": true,
+  "location": {
+    "support": {
+      "ticket_editor": {
+        "url": "assets/iframe.html",
+        "flexible": true
+      }
+    }
+  },
+  "version": "1.0.0",
+  "frameworkVersion": "2.0"
+}

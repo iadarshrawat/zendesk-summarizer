@@ -12,9 +12,6 @@ import { chunkTicketData, extractTicketsFromJSON } from "../services/chunking.js
 import { extractTextFromFile, cleanupFile } from "../services/fileProcessor.js";
 
 // Initialize queue for parallel processing
-// concurrency: 3 = max 3 tickets at a time (respects API rate limits)
-// interval: 1000 = per 1 second
-// intervalCap: 3 = max 3 tasks per second
 const enrichmentQueue = new PQueue({
   concurrency: 3,
   interval: 1000,
@@ -160,8 +157,6 @@ export async function autoImportTickets(req, res) {
     });
     
     console.log(`✅ Generated embeddings for ${totalChunks}/${allChunks.length} chunks`);
-
-    // throw new Error("Simulated error for testing error handling");
     
     console.log(`\n📤 Uploading ${vectors.length} vectors to Pinecone...`);
     await upsertVectors(vectors);
