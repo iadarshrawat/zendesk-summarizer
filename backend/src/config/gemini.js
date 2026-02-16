@@ -12,11 +12,11 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 /**
  * Get Gemini model instance
- * @param {string} modelName - Model name (default: gemini-2.0-flash-exp)
+ * @param {string} modelName - Model name (default: gemini-2.5-flash)
  * @param {object} config - Generation configuration
  */
 export function getGeminiModel(
-  modelName = "gemini-2.0-flash-exp",
+  modelName = "gemini-2.5-flash",
   config = {
     temperature: 0.7,
     topP: 0.8,
@@ -33,9 +33,7 @@ export function getGeminiModel(
  * Get embedding model
  */
 export function getEmbeddingModel() {
-  // Google's embedding model uses a different API
-  // The correct model name is "embedding-001" or we need to use generateContent with a special format
-  return genAI.getGenerativeModel({ model: "embedding-001" });
+  return genAI.getGenerativeModel({ model: "text-embedding-004" });
 }
 
 /**
@@ -43,10 +41,14 @@ export function getEmbeddingModel() {
  */
 export async function listAvailableModels() {
   try {
-    const response = await genAI.listModels();
+    const models = await genAI.listModels();
     console.log("📋 Available models:");
-    for await (const model of response) {
-      console.log(`   - ${model.name}: ${model.displayName}`);
+    for (const model of models) {
+      console.log(`   - ${model.name}`);
+      console.log(`     Display Name: ${model.displayName}`);
+      console.log(`     Description: ${model.description}`);
+      console.log(`     Supported Methods: ${model.supportedGenerationMethods.join(", ")}`);
+      console.log("");
     }
   } catch (error) {
     console.error("❌ Could not list models:", error.message);
@@ -57,9 +59,10 @@ export async function listAvailableModels() {
  * Generate content with Gemini
  * @param {string} prompt - The prompt to generate from
  * @param {object} config - Optional generation config
+ * @param {string} modelName - Model to use (default: gemini-2.5-flash)
  */
-export async function generateContent(prompt, config) {
-  const model = getGeminiModel("gemini-2.0-flash-exp", config);
+export async function generateContent(prompt, config, modelName = "gemini-2.5-flash") {
+  const model = getGeminiModel(modelName, config);
   const result = await model.generateContent(prompt);
   return result.response.text();
 }

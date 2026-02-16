@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>AI Reply Composer</title>
+  <script src="https://static.zdassets.com/zendesk_app_framework_sdk/2.0/zaf_sdk.min.js"></script>
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 13px;
+      padding: 12px;
+    }
+
+    h3 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 16px;
+    }
+
+    h4 {
+      margin-bottom: 8px;
+      margin-top: 0;
+      font-size: 14px;
+    }
+
+    .tone-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .tone-pill {
+      border: 1px solid #d8dcde;
+      border-radius: 16px;
+      padding: 6px 12px;
+      cursor: pointer;
+      background: #f8f9f9;
+      user-select: none;
+      font-size: 12px;
+    }
+
+    .tone-pill input {
+      display: none;
+    }
+
+    .tone-pill:has(input:checked) {
+      background: #1f73b7;
+      color: white;
+      border-color: #1f73b7;
+    }
+
+    .primary-btn {
+      background: #1f73b7;
+      color: white;
+      border-radius: 4px;
+      padding: 8px 12px;
+      cursor: pointer;
+      width: 100%;
+      font-size: 13px;
+      margin-top: 8px;
+      border: none;
+    }
+
+    .primary-btn:disabled {
+      background: #c2d4e8;
+      cursor: not-allowed;
+    }
+
+    .secondary-btn {
+      margin-top: 6px;
+      width: 100%;
+      border: 1px solid #d8dcde;
+      background: white;
+      border-radius: 4px;
+      padding: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .secondary-btn:hover {
+      background: #f8f9f9;
+    }
+
+    .secondary-btn:disabled {
+      background: #f0f0f0;
+      cursor: not-allowed;
+      color: #999;
+    }
+
+    .reply-container {
+      margin-top: 10px;
+    }
+
+    #replyBox {
+      background: #f8f9f9;
+      border: 1px solid #d8dcde;
+      border-radius: 4px;
+      padding: 8px;
+      min-height: 100px;
+      font-size: 12px;
+      margin-top: 8px;
+      line-height: 1.5;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      resize: vertical;
+      overflow-y: auto;
+      width: calc(100% - 18px);
+      color: #666;
+    }
+
+    #replyBox:read-only {
+      background: #f8f9f9;
+      cursor: not-allowed;
+    }
+
+    #replyBox:not(:read-only) {
+      background: white;
+      cursor: text;
+      color: #000;
+    }
+
+    #replyBox:focus {
+      outline: 2px solid #1f73b7;
+      outline-offset: 1px;
+    }
+
+    .edit-btn {
+      margin-top: 6px;
+      width: 100%;
+      border: 1px solid #1f73b7;
+      background: white;
+      color: #1f73b7;
+      border-radius: 4px;
+      padding: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .edit-btn:hover {
+      background: #e8f2f9;
+    }
+
+    .edit-btn.editing {
+      background: #1f73b7;
+      color: white;
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #1f73b7;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+
+<body>
+  <h3>✉️ AI Reply Composer</h3>
+
+  <h4>Tone</h4>
+  <div class="tone-group">
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="professional" checked /> Professional
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="friendly" /> Friendly
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="empathetic" /> Empathetic
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="apologetic" /> Apologetic
+    </label>
+    <label class="tone-pill">
+      <input type="radio" name="tone" value="concise" /> Concise
+    </label>
+  </div>
+
+  <button id="composeReplyBtn" class="primary-btn">Compose Reply</button>
+
+  <div class="reply-container">
+    <textarea id="replyBox" readonly placeholder="Reply will appear here..."></textarea>
+    <button id="editReplyBtn" class="edit-btn" style="display: none;">
+      ✏️ Edit Reply
+    </button>
+    <button id="copyReplyBtn" class="secondary-btn">
+      📋 Copy to Reply Editor
+    </button>
+  </div>
+
+  <script>
+    const BACKEND_URL = 'http://localhost:3000';
+    const client = ZAFClient.init();
+
+    function showError(boxId, message) {
+      const box = document.getElementById(boxId);
+      if (box.tagName === 'TEXTAREA') {
+        box.value = `❌ ${message}`;
+      } else {
+        box.innerHTML = `<span style="color: #cc0000;">❌ ${message}</span>`;
+      }
+    }
+
+    let agentLocale = 'en-US';
+    let ticketLocale = 'en-US';
+
+    async function initLanguages() {
+      try {
+        const agent = await client.request('/api/v2/users/me.json');
+        agentLocale = agent.user.locale;
+      } catch (e) {
+        console.error('Failed to load agent locale', e);
+      }
+    }
+
+    async function getCompleteTicketData() {
+      const ticketData = await client.get('ticket');
+      const ticketId = ticketData.ticket.id;
+
+      const ticketResponse = await client.request(`/api/v2/tickets/${ticketId}.json`);
+      const ticket = ticketResponse.ticket;
+
+      let requesterLocale = agentLocale;
+      try {
+        if (ticket.requester_id) {
+          const requesterResponse = await client.request(`/api/v2/users/${ticket.requester_id}.json`);
+          requesterLocale = requesterResponse.user.locale || agentLocale;
+          ticketLocale = requesterLocale;
+          console.log(`📍 Ticket locale detected: ${ticketLocale}`);
+        }
+      } catch (e) {
+        console.warn('Could not fetch requester locale, using agent locale');
+      }
+
+      return {
+        ticketId: ticket.id,
+        subject: ticket.subject,
+        description: ticket.description,
+        status: ticket.status,
+        priority: ticket.priority,
+        tags: ticket.tags || [],
+        locale: requesterLocale
+      };
+    }
+
+    async function translateText(text, targetLanguage) {
+      try {
+        console.log(`🌐 Translating to ${targetLanguage}...`);
+        
+        const response = await client.request({
+          url: `${BACKEND_URL}/translate`,
+          type: "POST",
+          contentType: "application/json",
+          data: JSON.stringify({
+            text: text,
+            targetLanguage: targetLanguage
+          }),
+          cors: true
+        });
+
+        return response.translatedText;
+      } catch (err) {
+        console.error("Translation error:", err);
+        throw err;
+      }
+    }
+
+    document.getElementById("composeReplyBtn").addEventListener("click", async () => {
+      const replyBox = document.getElementById("replyBox");
+      const editBtn = document.getElementById("editReplyBtn");
+      const selectedTone = document.querySelector('input[name="tone"]:checked');
+      const btn = document.getElementById("composeReplyBtn");
+
+      if (!selectedTone) {
+        showError("replyBox", "Please select a reply tone first");
+        return;
+      }
+
+      replyBox.value = "Composing reply...";
+      replyBox.readOnly = true;
+      btn.disabled = true;
+      editBtn.style.display = 'none';
+
+      try {
+        const ticketData = await getCompleteTicketData();
+
+        const response = await client.request({
+          url: `${BACKEND_URL}/compose-reply`,
+          type: "POST",
+          contentType: "application/json",
+          data: JSON.stringify({
+            ...ticketData,
+            tone: selectedTone.value,
+            language: agentLocale
+          }),
+          cors: true
+        });
+
+        replyBox.value = response.reply;
+        replyBox.readOnly = true;
+        
+        editBtn.style.display = 'block';
+        editBtn.textContent = '✏️ Edit Reply';
+        editBtn.classList.remove('editing');
+
+      } catch (err) {
+        console.error("Reply error:", err);
+        showError("replyBox", "Failed to compose reply");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("editReplyBtn").addEventListener("click", () => {
+      const replyBox = document.getElementById("replyBox");
+      const editBtn = document.getElementById("editReplyBtn");
+
+      if (replyBox.readOnly) {
+        replyBox.readOnly = false;
+        replyBox.focus();
+        editBtn.textContent = '✓ Done Editing';
+        editBtn.classList.add('editing');
+      } else {
+        replyBox.readOnly = true;
+        editBtn.textContent = '✏️ Edit Reply';
+        editBtn.classList.remove('editing');
+      }
+    });
+
+    document.getElementById("copyReplyBtn").addEventListener("click", async () => {
+      const replyBox = document.getElementById("replyBox");
+      const copyBtn = document.getElementById("copyReplyBtn");
+      const currentText = replyBox.value.trim();
+      
+      if (!currentText || currentText === "Reply will appear here...") {
+        alert("⚠️ Please generate a reply first!");
+        return;
+      }
+
+      try {
+        copyBtn.disabled = true;
+        copyBtn.textContent = "🔄 Translating...";
+
+        let finalText = currentText;
+        
+        if (ticketLocale && ticketLocale !== agentLocale) {
+          console.log(`🌐 Translating from ${agentLocale} to ${ticketLocale}`);
+          finalText = await translateText(currentText, ticketLocale);
+          console.log(`✅ Translation completed`);
+        } else {
+          console.log(`✓ No translation needed (same locale: ${agentLocale})`);
+        }
+
+        await client.invoke('ticket.comment.appendMarkdown', finalText);
+        
+        copyBtn.textContent = "✅ Copied!";
+        setTimeout(() => {
+          copyBtn.textContent = "📋 Copy to Reply Editor";
+          copyBtn.disabled = false;
+        }, 2000);
+
+      } catch (err) {
+        console.error("Copy error:", err);
+        alert("❌ Failed to copy reply to editor");
+        copyBtn.textContent = "📋 Copy to Reply Editor";
+        copyBtn.disabled = false;
+      }
+    });
+
+    initLanguages();
+    client.invoke('resize', { width: '100%', height: '400px' });
+  </script>
+</body>
+
+</html>

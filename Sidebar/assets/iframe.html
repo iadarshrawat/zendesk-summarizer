@@ -25,32 +25,6 @@
       font-size: 14px;
     }
 
-    .tone-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-
-    .tone-pill {
-      border: 1px solid #d8dcde;
-      border-radius: 16px;
-      padding: 6px 12px;
-      cursor: pointer;
-      background: #f8f9f9;
-      user-select: none;
-      font-size: 12px;
-    }
-
-    .tone-pill input {
-      display: none;
-    }
-
-    .tone-pill:has(input:checked) {
-      background: #1f73b7;
-      color: white;
-      border-color: #1f73b7;
-    }
-
     .primary-btn {
       background: #1f73b7;
       color: white;
@@ -109,22 +83,6 @@
       color: #666;
     }
 
-    #replyBox:read-only {
-      background: #f8f9f9;
-      cursor: not-allowed;
-    }
-
-    #replyBox:not(:read-only) {
-      background: white;
-      cursor: text;
-      color: #000;
-    }
-
-    #replyBox:focus {
-      outline: 2px solid #1f73b7;
-      outline-offset: 1px;
-    }
-
     #summaryBox {
       background: #f8f9f9;
       border: 1px solid #d8dcde;
@@ -135,12 +93,6 @@
       font-size: 12px;
       margin-top: 8px;
       line-height: 1.5;
-    }
-
-    hr {
-      border: none;
-      border-top: 1px solid #d8dcde;
-      margin: 16px 0;
     }
 
     .collapse-section {
@@ -191,27 +143,6 @@
     .arrow.open {
       transform: rotate(90deg);
     }
-
-    .edit-btn {
-      margin-top: 6px;
-      width: 100%;
-      border: 1px solid #1f73b7;
-      background: white;
-      color: #1f73b7;
-      border-radius: 4px;
-      padding: 6px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .edit-btn:hover {
-      background: #e8f2f9;
-    }
-
-    .edit-btn.editing {
-      background: #1f73b7;
-      color: white;
-    }
   </style>
 </head>
 
@@ -236,41 +167,6 @@
 
       <div id="summaryBox">Click to generate summary...</div>
     </div>
-  </div>
-
-  <hr />
-
-  <!-- Reply Composer Section -->
-  <h4>AI Reply Composer</h4>
-
-  <div class="tone-group">
-    <label class="tone-pill">
-      <input type="radio" name="tone" value="professional" /> Professional
-    </label>
-    <label class="tone-pill">
-      <input type="radio" name="tone" value="friendly" /> Friendly
-    </label>
-    <label class="tone-pill">
-      <input type="radio" name="tone" value="empathetic" /> Empathetic
-    </label>
-    <label class="tone-pill">
-      <input type="radio" name="tone" value="apologetic" /> Apologetic
-    </label>
-    <label class="tone-pill">
-      <input type="radio" name="tone" value="concise" /> Concise
-    </label>
-  </div>
-
-  <button id="composeReplyBtn" class="primary-btn">Compose Reply</button>
-
-  <div class="reply-container">
-    <textarea id="replyBox" readonly placeholder="Reply will appear here..."></textarea>
-    <button id="editReplyBtn" class="edit-btn" style="display: none;">
-      ✏️ Edit Reply
-    </button>
-    <button id="copyReplyBtn" class="secondary-btn">
-      📋 Copy to Reply Editor
-    </button>
   </div>
 
   <script>
@@ -435,133 +331,11 @@
     });
 
     /* =========================
-       COMPOSE REPLY
-    ========================== */
-
-    document.getElementById("composeReplyBtn").addEventListener("click", async () => {
-      const replyBox = document.getElementById("replyBox");
-      const editBtn = document.getElementById("editReplyBtn");
-      const selectedTone = document.querySelector('input[name="tone"]:checked');
-      const btn = document.getElementById("composeReplyBtn");
-
-      if (!selectedTone) {
-        showError("replyBox", "Please select a reply tone first");
-        return;
-      }
-
-      replyBox.value = "Composing reply...";
-      replyBox.readOnly = true;
-      btn.disabled = true;
-      editBtn.style.display = 'none';
-
-      try {
-        const ticketData = await getCompleteTicketData();
-
-        const response = await client.request({
-          url: `${BACKEND_URL}/compose-reply`,
-          type: "POST",
-          contentType: "application/json",
-          data: JSON.stringify({
-            ...ticketData,
-            tone: selectedTone.value,
-            language: agentLocale  // Pass agent's language
-          }),
-          cors: true
-        });
-
-        // Set the reply text
-        replyBox.value = response.reply;
-        replyBox.readOnly = true;
-        
-        // Show edit button
-        editBtn.style.display = 'block';
-        editBtn.textContent = '✏️ Edit Reply';
-        editBtn.classList.remove('editing');
-
-      } catch (err) {
-        console.error("Reply error:", err);
-        showError("replyBox", "Failed to compose reply");
-      } finally {
-        btn.disabled = false;
-      }
-    });
-
-    /* =========================
-       EDIT REPLY TOGGLE
-    ========================== */
-
-    document.getElementById("editReplyBtn").addEventListener("click", () => {
-      const replyBox = document.getElementById("replyBox");
-      const editBtn = document.getElementById("editReplyBtn");
-
-      if (replyBox.readOnly) {
-        // Enable editing
-        replyBox.readOnly = false;
-        replyBox.focus();
-        editBtn.textContent = '✓ Done Editing';
-        editBtn.classList.add('editing');
-      } else {
-        // Disable editing
-        replyBox.readOnly = true;
-        editBtn.textContent = '✏️ Edit Reply';
-        editBtn.classList.remove('editing');
-      }
-    });
-
-    /* =========================
-       COPY TO ZENDESK EDITOR (WITH TRANSLATION)
-    ========================== */
-
-    document.getElementById("copyReplyBtn").addEventListener("click", async () => {
-      const replyBox = document.getElementById("replyBox");
-      const copyBtn = document.getElementById("copyReplyBtn");
-      const currentText = replyBox.value.trim();
-      
-      if (!currentText || currentText === "Reply will appear here...") {
-        alert("⚠️ Please generate a reply first!");
-        return;
-      }
-
-      try {
-        // Disable button and show loading state
-        copyBtn.disabled = true;
-        copyBtn.textContent = "🔄 Translating...";
-
-        // Translate to ticket locale if different from agent locale
-        let finalText = currentText;
-        
-        if (ticketLocale && ticketLocale !== agentLocale) {
-          console.log(`🌐 Translating from ${agentLocale} to ${ticketLocale}`);
-          finalText = await translateText(currentText, ticketLocale);
-          console.log(`✅ Translation completed`);
-        } else {
-          console.log(`✓ No translation needed (same locale: ${agentLocale})`);
-        }
-
-        // Copy to editor
-        await client.invoke('ticket.comment.appendMarkdown', finalText);
-        
-        // Show success message
-        copyBtn.textContent = "✅ Copied!";
-        setTimeout(() => {
-          copyBtn.textContent = "📋 Copy to Reply Editor";
-          copyBtn.disabled = false;
-        }, 2000);
-
-      } catch (err) {
-        console.error("Copy error:", err);
-        alert("❌ Failed to copy reply to editor");
-        copyBtn.textContent = "📋 Copy to Reply Editor";
-        copyBtn.disabled = false;
-      }
-    });
-
-    /* =========================
        INITIALIZE
     ========================== */
 
     initLanguages();
-    client.invoke('resize', { width: '100%', height: '560px' });
+    client.invoke('resize', { width: '100%', height: '400px' });
   </script>
 </body>
 
