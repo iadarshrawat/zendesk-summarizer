@@ -9,7 +9,7 @@ if (!process.env.PINECONE_API_KEY) {
 }
 
 const INDEX_NAME = "zendesk-kb";
-const DIMENSION = 3072; // gemini-embedding-001 produces 3072-dimensional vectors
+const DIMENSION = 1536; // OpenAI text-embedding-3-small dimension
 
 const pc = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY,
@@ -75,11 +75,34 @@ export async function initializeIndex() {
         console.log(`🔍 Index dimension: ${indexDimension}`);
         
         if (indexDimension !== DIMENSION) {
-          console.error(`\n❌ CRITICAL ERROR: Dimension mismatch!`);
+          console.error(`\n⚠️ Dimension mismatch detected!`);
           console.error(`   Index has: ${indexDimension} dimensions`);
-          console.error(`   Model produces: ${DIMENSION} dimensions`);
-          console.error(`\n💡 FIX: Delete the index via /force-delete-index endpoint`);
-          throw new Error(`Dimension mismatch: index=${indexDimension}, model=${DIMENSION}`);
+          console.error(`   Model needs: ${DIMENSION} dimensions`);
+          console.error(`\n� Auto-fixing: Deleting old index and creating new one...`);
+          
+          // Auto-delete and recreate
+          await pc.deleteIndex(INDEX_NAME);
+          console.log(`✅ Old index deleted`);
+          
+          // Wait for deletion
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+          console.log(`📦 Creating new index with ${DIMENSION} dimensions...`);
+          await pc.createIndex({
+            name: INDEX_NAME,
+            dimension: DIMENSION,
+            metric: "cosine",
+            spec: {
+              serverless: {
+                cloud: "aws",
+                region: "us-east-1"
+              }
+            }
+          });
+          
+          console.log(`✅ New index created successfully!`);
+          // Wait for new index to be ready
+          await new Promise(resolve => setTimeout(resolve, 5000));
         }
         
         console.log(`✅ Dimension verified: ${DIMENSION}`);
@@ -157,15 +180,26 @@ export async function upsertVectors(vectors, batchSize = 100) {
 }
 
 /**
- * Query vectors
+ * Query vectors with optional metadata filtering
+ * @param {number[]} vector - Embedding vector
+ * @param {number} topK - Number of results to return
+ * @param {boolean} includeMetadata - Include metadata in results
+ * @param {object} filter - Metadata filter (e.g., { brand: { $eq: 'brand_name' } })
  */
-export async function queryVectors(vector, topK = 5, includeMetadata = true) {
+export async function queryVectors(vector, topK = 5, includeMetadata = true, filter = null) {
   const index = await getIndex();
-  return await index.query({
+  
+  const queryConfig = {
     vector,
     topK,
     includeMetadata,
-  });
+  };
+  
+  if (filter) {
+    queryConfig.filter = filter;
+  }
+  
+  return await index.query(queryConfig);
 }
 
 export { INDEX_NAME, DIMENSION, pc };

@@ -18,8 +18,11 @@ export async function composeReply(req, res) {
     // Generate query embedding
     const queryEmbedding = await embedText(`${ticket.subject} ${ticket.description}`);
 
-    // Search knowledge base
-    const results = await queryVectors(queryEmbedding, 5, true);
+    // Build brand filter if brand is provided
+    const filter = ticket.brand ? { brand: { $eq: ticket.brand } } : null;
+
+    // Search knowledge base with brand filter
+    const results = await queryVectors(queryEmbedding, 5, true, filter);
 
     // Extract relevant context
     const kbChunks = results.matches
@@ -28,7 +31,7 @@ export async function composeReply(req, res) {
       .join("\n\n") || "No relevant knowledge base found.";
 
     const prompt = buildReplyPrompt(ticket, ticket.tone || "professional", kbChunks);
-    console.log("📝 Generating reply for ticket:", ticket.ticketId);
+    console.log("📝 Generating reply for ticket:", ticket.ticketId, `[Brand: ${ticket.brand || 'default'}]`);
 
     const replyText = await generateContent(prompt, {
       temperature: 0.7,

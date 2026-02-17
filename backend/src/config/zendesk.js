@@ -246,7 +246,9 @@ export async function enrichTicketWithComments(ticket, fieldsMap = null) {
     resolution: resolution,
     custom_fields: customFields,
     requester_id: ticket.requester_id,
-    assignee_id: ticket.assignee_id
+    assignee_id: ticket.assignee_id,
+    brand_id: ticket.brand_id || null,
+    brand: ticket.brand?.name || 'default'
   };
 }
 
