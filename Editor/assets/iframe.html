@@ -249,6 +249,7 @@
         status: ticket.status,
         priority: ticket.priority,
         tags: ticket.tags || [],
+        brand: ticket.organization?.name || 'default_brand',  // Extract brand from organization
         locale: requesterLocale
       };
     }

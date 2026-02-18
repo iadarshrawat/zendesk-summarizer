@@ -1,10 +1,40 @@
 /**
  * Chunk ticket data into searchable pieces
+ * Respects OpenAI embedding model's 8192 token limit
+ * Using conservative estimate: 1 token ≈ 4 characters
+ * So max chunk: 8192 * 4 = 32768 chars, but we use 3000 chars (750 tokens) to be safe
  * @param {object} ticket - Enriched ticket object
  * @returns {Array<{text: string, metadata: object}>} Array of chunks
  */
 export function chunkTicketData(ticket) {
   const chunks = [];
+  
+  // Max characters per chunk (3000 chars ≈ 750 tokens, very conservative)
+  // This ensures we never hit the 8192 token limit
+  const MAX_CHUNK_SIZE = 3000;
+  
+  /**
+   * Split text into chunks if it exceeds max size
+   */
+  function splitIfNeeded(text, maxSize = MAX_CHUNK_SIZE) {
+    if (text.length <= maxSize) {
+      return [text];
+    }
+    
+    const splitChunks = [];
+    let remaining = text;
+    let partNum = 1;
+    const totalParts = Math.ceil(text.length / maxSize);
+    
+    while (remaining.length > 0) {
+      const chunk = remaining.substring(0, maxSize);
+      splitChunks.push(`${chunk.trim()} [Part ${partNum}/${totalParts}]`);
+      remaining = remaining.substring(maxSize).trim();
+      partNum++;
+    }
+    
+    return splitChunks;
+  }
   
   // Build custom fields text if available
   let customFieldsText = '';
@@ -33,23 +63,33 @@ Tags: ${ticket.tags?.join(', ') || 'None'}${customFieldsText}
       ticket_id: ticket.ticket_id,
       subject: ticket.subject,
       tags: ticket.tags?.join(', ') || '',
-      has_custom_fields: Object.keys(ticket.custom_fields || {}).length > 0
+      has_custom_fields: Object.keys(ticket.custom_fields || {}).length > 0,
+      brand: ticket.brand || 'default',
+      brand_id: ticket.brand_id || null
     }
   });
   
-  // Conversation chunk
+  // Conversation chunk - split if too long
   if (ticket.conversation && ticket.conversation.length > 0) {
     const conversationText = ticket.conversation
       .map((msg, idx) => `${idx + 1}. ${msg.author}: ${msg.message}`)
       .join('\n\n');
     
-    chunks.push({
-      text: `Ticket ${ticket.ticket_id} Conversation:\n\n${conversationText}`,
-      metadata: {
-        type: 'conversation',
-        ticket_id: ticket.ticket_id,
-        subject: ticket.subject
-      }
+    const conversationChunks = splitIfNeeded(`Ticket ${ticket.ticket_id} Conversation:\n\n${conversationText}`);
+    
+    conversationChunks.forEach((chunk, idx) => {
+      chunks.push({
+        text: chunk,
+        metadata: {
+          type: 'conversation',
+          ticket_id: ticket.ticket_id,
+          subject: ticket.subject,
+          part: idx + 1,
+          totalParts: conversationChunks.length,
+          brand: ticket.brand || 'default',
+          brand_id: ticket.brand_id || null
+        }
+      });
     });
   }
   
@@ -68,7 +108,9 @@ Related Tags: ${ticket.tags?.join(', ') || 'None'}
         type: 'resolution',
         ticket_id: ticket.ticket_id,
         subject: ticket.subject,
-        tags: ticket.tags?.join(', ') || ''
+        tags: ticket.tags?.join(', ') || '',
+        brand: ticket.brand || 'default',
+        brand_id: ticket.brand_id || null
       }
     });
   }
@@ -89,7 +131,9 @@ Related Tags: ${ticket.tags?.join(', ') || 'None'}
         type: 'custom_fields',
         ticket_id: ticket.ticket_id,
         subject: ticket.subject,
-        field_count: Object.keys(ticket.custom_fields).length
+        field_count: Object.keys(ticket.custom_fields).length,
+        brand: ticket.brand || 'default',
+        brand_id: ticket.brand_id || null
       }
     });
   }
