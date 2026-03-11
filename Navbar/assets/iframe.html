@@ -411,6 +411,172 @@
 
     checkBackendConnection();
 
+    // ==================== FILE UPLOAD SETUP ====================
+    function setupFileUpload() {
+      console.log('🔧 Setting up file upload...');
+      
+      const fileInput = document.getElementById('fileInput');
+      const dropZone = document.getElementById('dropZone');
+      const fileUploadStatus = document.getElementById('fileUploadStatus');
+      const fileUploadProgress = document.getElementById('fileUploadProgress');
+      const fileUploadProgressFill = document.getElementById('fileUploadProgressFill');
+
+      console.log('🔍 File upload elements:', {
+        fileInput: !!fileInput,
+        dropZone: !!dropZone,
+        fileUploadStatus: !!fileUploadStatus,
+        fileUploadProgress: !!fileUploadProgress,
+        fileUploadProgressFill: !!fileUploadProgressFill
+      });
+
+      if (!fileInput || !dropZone || !fileUploadStatus) {
+        console.error('❌ File upload elements not found in DOM');
+        return;
+      }
+
+      // Define function FIRST before adding event listeners
+      async function handleFileUpload() {
+        const file = fileInput.files[0];
+        if (!file) {
+          console.warn('⚠️  No file selected');
+          return;
+        }
+
+        console.log('🚀 File upload started:', file.name);
+
+        fileUploadStatus.className = 'status-message loading';
+        fileUploadStatus.textContent = `⏳ Uploading ${file.name}...`;
+        fileUploadProgress.classList.add('active');
+        fileUploadProgressFill.style.width = '30%';
+        fileUploadProgressFill.textContent = '30%';
+
+        console.log(`📤 Starting file upload:`, {
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type,
+          backendUrl: BACKEND_URL
+        });
+
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+
+          console.log('📤 FormData prepared, sending to:', `${BACKEND_URL}/import-file`);
+
+          fileUploadProgressFill.style.width = '60%';
+          fileUploadProgressFill.textContent = '60%';
+
+          const response = await fetch(`${BACKEND_URL}/import-file`, {
+            method: 'POST',
+            body: formData,
+            mode: 'cors'
+          });
+
+          console.log('📥 Response received:', {
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers)
+          });
+
+          if (!response.ok) {
+            let errorData;
+            try {
+              errorData = await response.json();
+            } catch (e) {
+              errorData = { error: 'Server error', details: response.statusText };
+            }
+            
+            console.error('❌ Server error response:', errorData);
+            throw new Error(errorData.error || errorData.details || `Server error: ${response.status}`);
+          }
+
+          const result = await response.json();
+          console.log('✅ Upload successful:', result);
+
+          fileUploadProgressFill.style.width = '100%';
+          fileUploadProgressFill.textContent = '100%';
+
+          fileUploadStatus.className = 'status-message success';
+          
+          if (result.type === 'tickets') {
+            fileUploadStatus.innerHTML = `
+              ✅ <strong>Successfully imported:</strong> ${result.fileName}<br><br>
+              📊 Tickets: ${result.ticketsProcessed}<br>
+              📦 Chunks: ${result.totalChunks}
+            `;
+          } else {
+            fileUploadStatus.textContent = `✅ Successfully imported: ${result.fileName}`;
+          }
+
+          client.invoke("notify", `✅ File imported: ${result.fileName}`, "notice");
+
+          setTimeout(() => {
+            fileUploadProgress.classList.remove('active');
+          }, 3000);
+
+        } catch (err) {
+          console.error('❌ Upload error:', {
+            message: err.message,
+            stack: err.stack,
+            backendUrl: BACKEND_URL
+          });
+          
+          fileUploadStatus.className = 'status-message error';
+          
+          if (err.message === 'Failed to fetch') {
+            fileUploadStatus.textContent = `❌ Cannot connect to backend at ${BACKEND_URL}<br><br>💡 Make sure:<br>1. Backend is running<br>2. CORS is enabled<br>3. Backend URL is correct`;
+          } else {
+            fileUploadStatus.textContent = `❌ Error: ${err.message}`;
+          }
+          
+          fileUploadProgress.classList.remove('active');
+          client.invoke("notify", "❌ Upload failed", "error");
+        } finally {
+          fileInput.value = '';
+        }
+      }
+
+      // Add event listeners AFTER function is defined
+      fileInput.addEventListener('change', () => {
+        console.log('📁 File input change event triggered');
+        handleFileUpload();
+      });
+      console.log('✅ fileInput event listener added');
+
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+      });
+
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+      });
+
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+          console.log('📥 Files dropped:', files[0].name);
+          fileInput.files = files;
+          handleFileUpload();
+        }
+      });
+
+      dropZone.addEventListener('click', (e) => {
+        if (e.target.tagName !== 'LABEL') {
+          console.log('🖱️  Drop zone clicked');
+          fileInput.click();
+        }
+      });
+
+      console.log('✅ All file upload event listeners added');
+    }
+
+    // Call setup right after client is initialized
+    setupFileUpload();
+
     // ==================== AUTO-IMPORT HANDLER ====================
     document.getElementById("autoImportBtn").addEventListener("click", async () => {
       const startDate = document.getElementById("startDate").value;
@@ -567,109 +733,6 @@
         btn.disabled = false;
       }
     });
-
-    // ==================== FILE UPLOAD HANDLER ====================
-    const fileInput = document.getElementById('fileInput');
-    const dropZone = document.getElementById('dropZone');
-    const fileUploadStatus = document.getElementById('fileUploadStatus');
-    const fileUploadProgress = document.getElementById('fileUploadProgress');
-    const fileUploadProgressFill = document.getElementById('fileUploadProgressFill');
-
-    fileInput.addEventListener('change', handleFileUpload);
-
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      dropZone.classList.add('dragover');
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-      dropZone.classList.remove('dragover');
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('dragover');
-      
-      const files = e.dataTransfer.files;
-      if (files.length > 0) {
-        fileInput.files = files;
-        handleFileUpload();
-      }
-    });
-
-    dropZone.addEventListener('click', (e) => {
-      if (e.target.tagName !== 'LABEL') {
-        fileInput.click();
-      }
-    });
-
-    async function handleFileUpload() {
-      const file = fileInput.files[0];
-      if (!file) return;
-
-      fileUploadStatus.className = 'status-message loading';
-      fileUploadStatus.textContent = `⏳ Uploading ${file.name}...`;
-      fileUploadProgress.classList.add('active');
-      fileUploadProgressFill.style.width = '30%';
-      fileUploadProgressFill.textContent = '30%';
-
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-
-        fileUploadProgressFill.style.width = '60%';
-        fileUploadProgressFill.textContent = '60%';
-
-        const response = await fetch(`${BACKEND_URL}/import-file`, {
-          method: 'POST',
-          body: formData,
-          mode: 'cors'
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          throw new Error(errorData.error || errorData.details || `Server error: ${response.status}`);
-        }
-
-        const result = await response.json();
-
-        fileUploadProgressFill.style.width = '100%';
-        fileUploadProgressFill.textContent = '100%';
-
-        fileUploadStatus.className = 'status-message success';
-        
-        if (result.type === 'tickets') {
-          fileUploadStatus.innerHTML = `
-            ✅ <strong>Successfully imported:</strong> ${result.fileName}<br><br>
-            📊 Tickets: ${result.ticketsProcessed}<br>
-            📦 Chunks: ${result.totalChunks}
-          `;
-        } else {
-          fileUploadStatus.textContent = `✅ Successfully imported: ${result.fileName}`;
-        }
-
-        client.invoke("notify", `✅ File imported: ${result.fileName}`, "notice");
-
-        setTimeout(() => {
-          fileUploadProgress.classList.remove('active');
-        }, 3000);
-
-      } catch (err) {
-        console.error('❌ Upload error:', err);
-        fileUploadStatus.className = 'status-message error';
-        
-        if (err.message === 'Failed to fetch') {
-          fileUploadStatus.textContent = `❌ Cannot connect to server. Make sure the backend is running`;
-        } else {
-          fileUploadStatus.textContent = `❌ Error: ${err.message}`;
-        }
-        
-        fileUploadProgress.classList.remove('active');
-        client.invoke("notify", "❌ Upload failed", "error");
-      } finally {
-        fileInput.value = '';
-      }
-    }
 
     // ==================== APP INITIALIZATION ====================
     client.invoke('resize', { width: '100%', height: '100%' });

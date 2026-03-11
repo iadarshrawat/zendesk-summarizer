@@ -1,4 +1,4 @@
-import { generateContent } from "../config/gemini.js";
+import { generateContent } from "../config/openai.js";
 import { queryVectors } from "../config/pinecone.js";
 import { embedText } from "../services/embedding.js";
 import { buildReplyPrompt } from "../utils/prompts.js";
@@ -6,6 +6,7 @@ import { buildTranslationPrompt } from "../utils/prompts.js";
 
 /**
  * Compose RAG-based reply for ticket
+ * Priority: Manually uploaded KB > Ticket conversations
  */
 export async function composeReply(req, res) {
   try {
@@ -21,17 +22,45 @@ export async function composeReply(req, res) {
     // Build brand filter if brand is provided
     const filter = ticket.brand ? { brand: { $eq: ticket.brand } } : null;
 
-    // Search knowledge base with brand filter
-    const results = await queryVectors(queryEmbedding, 5, true, filter);
+    // ==================== PHASE 1: Search manually uploaded KB first ====================
+    console.log("📚 PHASE 1: Searching manually uploaded knowledge base...");
+    
+    const kbFilter = filter ? { ...filter, source: { $eq: "manual_upload" } } : { source: { $eq: "manual_upload" } };
+    const kbResults = await queryVectors(queryEmbedding, 10, true, kbFilter);
+    
+    // Filter results with good relevance score (cosine > 0.7)
+    const relevantKBMatches = kbResults.matches.filter(m => m.score >= 0.7);
+    console.log(`✅ Found ${relevantKBMatches.length} relevant KB articles (score >= 0.7)`);
 
-    // Extract relevant context
-    const kbChunks = results.matches
+    let finalResults = null;
+    let searchSource = "manual_kb";
+
+    if (relevantKBMatches.length > 0) {
+      // ✅ Use manually uploaded KB results
+      finalResults = { matches: relevantKBMatches.slice(0, 5) };
+      console.log("✅ Using manually uploaded KB for reply generation");
+    } else {
+      // ==================== PHASE 2: Fall back to ticket conversations if KB not sufficient ====================
+      console.log("⚠️  PHASE 2: No good KB matches found. Searching ticket conversations...");
+      
+      const chatFilter = filter ? { ...filter, source: { $eq: "ticket_chat" } } : { source: { $eq: "ticket_chat" } };
+      const chatResults = await queryVectors(queryEmbedding, 10, true, chatFilter);
+      
+      const relevantChatMatches = chatResults.matches.filter(m => m.score >= 0.6);
+      console.log(`✅ Found ${relevantChatMatches.length} relevant chat conversations (score >= 0.6)`);
+      
+      finalResults = { matches: relevantChatMatches.slice(0, 5) };
+      searchSource = "ticket_chat";
+    }
+
+    // Extract relevant context from best source
+    const kbChunks = finalResults.matches
       .map(match => match.metadata?.content || "")
       .filter(Boolean)
-      .join("\n\n") || "No relevant knowledge base found.";
+      .join("\n\n") || "No relevant knowledge found.";
 
     const prompt = buildReplyPrompt(ticket, ticket.tone || "professional", kbChunks);
-    console.log("📝 Generating reply for ticket:", ticket.ticketId, `[Brand: ${ticket.brand || 'default'}]`);
+    console.log("📝 Generating reply for ticket:", ticket.ticketId, `[Brand: ${ticket.brand || 'default'}, Source: ${searchSource}]`);
 
     const replyText = await generateContent(prompt, {
       temperature: 0.7,
@@ -42,9 +71,11 @@ export async function composeReply(req, res) {
     res.json({
       ticketId: ticket.ticketId,
       reply: replyText,
-      sources: results.matches.map(m => ({
+      source: searchSource,
+      sources: finalResults.matches.map(m => ({
         title: m.metadata?.subject || m.metadata?.title,
         type: m.metadata?.type,
+        source: m.metadata?.source,
         score: m.score
       })).filter(s => s.title),
     });

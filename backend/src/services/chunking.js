@@ -1,21 +1,18 @@
-/**
- * Chunk ticket data into searchable pieces
- * Respects OpenAI embedding model's 8192 token limit
- * Using conservative estimate: 1 token ≈ 4 characters
- * So max chunk: 8192 * 4 = 32768 chars, but we use 3000 chars (750 tokens) to be safe
- * @param {object} ticket - Enriched ticket object
- * @returns {Array<{text: string, metadata: object}>} Array of chunks
- */
 export function chunkTicketData(ticket) {
   const chunks = [];
-  
-  // Max characters per chunk (3000 chars ≈ 750 tokens, very conservative)
-  // This ensures we never hit the 8192 token limit
   const MAX_CHUNK_SIZE = 3000;
   
-  /**
-   * Split text into chunks if it exceeds max size
-   */
+  // Helper: clean metadata by removing null/undefined values
+  function cleanMetadata(meta) {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(meta)) {
+      if (value !== null && value !== undefined && value !== '') {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned;
+  }
+  
   function splitIfNeeded(text, maxSize = MAX_CHUNK_SIZE) {
     if (text.length <= maxSize) {
       return [text];
@@ -36,7 +33,6 @@ export function chunkTicketData(ticket) {
     return splitChunks;
   }
   
-  // Build custom fields text if available
   let customFieldsText = '';
   if (ticket.custom_fields && Object.keys(ticket.custom_fields).length > 0) {
     const fieldLines = Object.entries(ticket.custom_fields).map(([name, data]) => {
@@ -58,15 +54,15 @@ Tags: ${ticket.tags?.join(', ') || 'None'}${customFieldsText}
   
   chunks.push({
     text: mainContent,
-    metadata: {
+    metadata: cleanMetadata({
       type: 'ticket_overview',
       ticket_id: ticket.ticket_id,
       subject: ticket.subject,
       tags: ticket.tags?.join(', ') || '',
       has_custom_fields: Object.keys(ticket.custom_fields || {}).length > 0,
       brand: ticket.brand || 'default',
-      brand_id: ticket.brand_id || null
-    }
+      brand_id: ticket.brand_id
+    })
   });
   
   // Conversation chunk - split if too long
@@ -80,15 +76,15 @@ Tags: ${ticket.tags?.join(', ') || 'None'}${customFieldsText}
     conversationChunks.forEach((chunk, idx) => {
       chunks.push({
         text: chunk,
-        metadata: {
+        metadata: cleanMetadata({
           type: 'conversation',
           ticket_id: ticket.ticket_id,
           subject: ticket.subject,
           part: idx + 1,
           totalParts: conversationChunks.length,
           brand: ticket.brand || 'default',
-          brand_id: ticket.brand_id || null
-        }
+          brand_id: ticket.brand_id
+        })
       });
     });
   }
@@ -104,14 +100,14 @@ Related Tags: ${ticket.tags?.join(', ') || 'None'}
     
     chunks.push({
       text: resolutionText,
-      metadata: {
+      metadata: cleanMetadata({
         type: 'resolution',
         ticket_id: ticket.ticket_id,
         subject: ticket.subject,
         tags: ticket.tags?.join(', ') || '',
         brand: ticket.brand || 'default',
-        brand_id: ticket.brand_id || null
-      }
+        brand_id: ticket.brand_id
+      })
     });
   }
   

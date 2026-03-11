@@ -14,22 +14,10 @@ const RATE_LIMIT = {
 // Simple in-memory cache to avoid re-embedding identical text
 const embeddingCache = new Map();
 
-/**
- * Sleep utility
- */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/**
- * Generate embedding for text using OpenAI's embedding model
- * Uses text-embedding-3-small (1536 dimensions)
- * Includes rate limiting, retry logic, and caching
- * Truncates text to 7000 chars (~1750 tokens) to stay safely under 8192 limit
- * @param {string} text - Text to embed
- * @param {boolean} useCache - Whether to use cache (default: true)
- * @returns {Promise<number[]>} Embedding vector (1536 dimensions)
- */
 export async function embedText(text, useCache = true) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -64,7 +52,7 @@ export async function embedText(text, useCache = true) {
       const response = await axios.post(
         endpoint,
         {
-          model: "text-embedding-3-small",
+          model: "text-embedding-3-large",
           input: processText,
           encoding_format: "float"
         },
