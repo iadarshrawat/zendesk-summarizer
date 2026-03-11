@@ -3,7 +3,7 @@
 Concise, actionable documentation for the backend and the two frontend iframes (Navbar & Sidebar).
 
 ## What this project does
-- Backend (`backend/server.js`): ingestion, chunking, embeddings (GenAI), Pinecone index management, ticket summarization, and RAG reply composition.
+- Backend (`backend/server.js`): ingestion, chunking, embeddings (OpenAI), Pinecone index management, ticket summarization, and RAG reply composition.
 - Navbar iframe (`Navbar/assets/iframe.html`): UI for auto-import (date range) and manual file upload.
 - Sidebar iframe (`Sidebar/assets/iframe.html`): ticket summarization and AI reply composer for Zendesk tickets.
 
@@ -19,12 +19,12 @@ node backend/server.js
 Default backend URL used by the iframes: `http://localhost:3000`.
 
 ## Required environment variables
-- `GEMINI_API_KEY` — required (used by GoogleGenerativeAI for embeddings & generation).
+- `OPENAI_API_KEY` — required (used by OpenAI for embeddings & content generation).
 - `PINECONE_API_KEY` — required (used to create/access Pinecone index).
 - `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN`, `ZENDESK_DOMAIN` — optional but required for `/auto-import-tickets` to fetch real Zendesk tickets.
 
 ## Key constants & limits
-- Pinecone index name: `zendesk-kb` (embedding dimension enforced to 768).
+- Pinecone index name: `zendesk-kb` (embedding dimension enforced to 1536).
 - Multer upload limit: 10 MB (file uploads). Internal extractor rejects parsing files > 5 MB.
 - Supported upload types in UI: `.txt, .md, .csv, .json`.
 - Rate-limiting in code: 1s between Zendesk paged requests; 500ms between ticket enrichments.

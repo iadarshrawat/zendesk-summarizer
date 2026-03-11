@@ -69,97 +69,8 @@
       cursor: not-allowed;
     }
 
-    .secondary-btn {
-      margin-top: 6px;
-      width: 100%;
-      border: 1px solid #d8dcde;
-      background: white;
-      border-radius: 4px;
-      padding: 6px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .secondary-btn:hover {
-      background: #f8f9f9;
-    }
-
-    .secondary-btn:disabled {
-      background: #f0f0f0;
-      cursor: not-allowed;
-      color: #999;
-    }
-
     .reply-container {
       margin-top: 10px;
-    }
-
-    #replyBox {
-      background: #f8f9f9;
-      border: 1px solid #d8dcde;
-      border-radius: 4px;
-      padding: 8px;
-      min-height: 100px;
-      font-size: 12px;
-      margin-top: 8px;
-      line-height: 1.5;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      resize: vertical;
-      overflow-y: auto;
-      width: calc(100% - 18px);
-      color: #666;
-    }
-
-    #replyBox:read-only {
-      background: #f8f9f9;
-      cursor: not-allowed;
-    }
-
-    #replyBox:not(:read-only) {
-      background: white;
-      cursor: text;
-      color: #000;
-    }
-
-    #replyBox:focus {
-      outline: 2px solid #1f73b7;
-      outline-offset: 1px;
-    }
-
-    .edit-btn {
-      margin-top: 6px;
-      width: 100%;
-      border: 1px solid #1f73b7;
-      background: white;
-      color: #1f73b7;
-      border-radius: 4px;
-      padding: 6px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .edit-btn:hover {
-      background: #e8f2f9;
-    }
-
-    .edit-btn.editing {
-      background: #1f73b7;
-      color: white;
-    }
-
-    .loading-spinner {
-      display: inline-block;
-      width: 12px;
-      height: 12px;
-      border: 2px solid #f3f3f3;
-      border-top: 2px solid #1f73b7;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
     }
   </style>
 </head>
@@ -189,27 +100,12 @@
   <button id="composeReplyBtn" class="primary-btn">Compose Reply</button>
 
   <div class="reply-container">
-    <textarea id="replyBox" readonly placeholder="Reply will appear here..."></textarea>
-    <button id="editReplyBtn" class="edit-btn" style="display: none;">
-      ✏️ Edit Reply
-    </button>
-    <button id="copyReplyBtn" class="secondary-btn">
-      📋 Copy to Reply Editor
-    </button>
+    <div id="statusMessage" style="margin-top: 12px; padding: 8px; border-radius: 4px; display: none; font-size: 12px;"></div>
   </div>
 
   <script>
     const BACKEND_URL = 'http://localhost:3000';
     const client = ZAFClient.init();
-
-    function showError(boxId, message) {
-      const box = document.getElementById(boxId);
-      if (box.tagName === 'TEXTAREA') {
-        box.value = `❌ ${message}`;
-      } else {
-        box.innerHTML = `<span style="color: #cc0000;">❌ ${message}</span>`;
-      }
-    }
 
     let agentLocale = 'en-US';
     let ticketLocale = 'en-US';
@@ -277,20 +173,25 @@
     }
 
     document.getElementById("composeReplyBtn").addEventListener("click", async () => {
-      const replyBox = document.getElementById("replyBox");
-      const editBtn = document.getElementById("editReplyBtn");
+      const statusMessage = document.getElementById("statusMessage");
       const selectedTone = document.querySelector('input[name="tone"]:checked');
       const btn = document.getElementById("composeReplyBtn");
 
       if (!selectedTone) {
-        showError("replyBox", "Please select a reply tone first");
+        statusMessage.style.display = 'block';
+        statusMessage.className = 'status error';
+        statusMessage.style.backgroundColor = '#ffe6e6';
+        statusMessage.style.color = '#cc0000';
+        statusMessage.textContent = "⚠️ Please select a reply tone first";
         return;
       }
 
-      replyBox.value = "Composing reply...";
-      replyBox.readOnly = true;
+      statusMessage.style.display = 'block';
+      statusMessage.className = 'status loading';
+      statusMessage.style.backgroundColor = '#e8f2f9';
+      statusMessage.style.color = '#1f73b7';
+      statusMessage.textContent = "✨ Composing reply...";
       btn.disabled = true;
-      editBtn.style.display = 'none';
 
       try {
         const ticketData = await getCompleteTicketData();
@@ -307,74 +208,42 @@
           cors: true
         });
 
-        replyBox.value = response.reply;
-        replyBox.readOnly = true;
+        const replyText = response.reply;
         
-        editBtn.style.display = 'block';
-        editBtn.textContent = '✏️ Edit Reply';
-        editBtn.classList.remove('editing');
+        // Show "translating" message
+        statusMessage.style.backgroundColor = '#e8f2f9';
+        statusMessage.textContent = "🌐 Inserting reply into Zendesk...";
+
+        let finalText = replyText;
+        
+        // Translate if needed
+        if (ticketLocale && ticketLocale !== agentLocale) {
+          statusMessage.textContent = `🌐 Translating to ${ticketLocale}...`;
+          console.log(`🌐 Translating from ${agentLocale} to ${ticketLocale}`);
+          finalText = await translateText(replyText, ticketLocale);
+          console.log(`✅ Translation completed`);
+        }
+
+        // Insert into Zendesk
+await client.set('ticket.comment.text', "");
+        await client.invoke('ticket.comment.appendMarkdown', finalText);
+        
+        // Show success message
+        statusMessage.style.backgroundColor = '#e6f7e6';
+        statusMessage.style.color = '#006600';
+        statusMessage.textContent = "✅ Reply successfully added to ticket!";
+        
+        setTimeout(() => {
+          statusMessage.style.display = 'none';
+        }, 3000);
 
       } catch (err) {
         console.error("Reply error:", err);
-        showError("replyBox", "Failed to compose reply");
+        statusMessage.style.backgroundColor = '#ffe6e6';
+        statusMessage.style.color = '#cc0000';
+        statusMessage.textContent = `❌ Failed to generate reply: ${err.message || 'Unknown error'}`;
       } finally {
         btn.disabled = false;
-      }
-    });
-
-    document.getElementById("editReplyBtn").addEventListener("click", () => {
-      const replyBox = document.getElementById("replyBox");
-      const editBtn = document.getElementById("editReplyBtn");
-
-      if (replyBox.readOnly) {
-        replyBox.readOnly = false;
-        replyBox.focus();
-        editBtn.textContent = '✓ Done Editing';
-        editBtn.classList.add('editing');
-      } else {
-        replyBox.readOnly = true;
-        editBtn.textContent = '✏️ Edit Reply';
-        editBtn.classList.remove('editing');
-      }
-    });
-
-    document.getElementById("copyReplyBtn").addEventListener("click", async () => {
-      const replyBox = document.getElementById("replyBox");
-      const copyBtn = document.getElementById("copyReplyBtn");
-      const currentText = replyBox.value.trim();
-      
-      if (!currentText || currentText === "Reply will appear here...") {
-        alert("⚠️ Please generate a reply first!");
-        return;
-      }
-
-      try {
-        copyBtn.disabled = true;
-        copyBtn.textContent = "🔄 Translating...";
-
-        let finalText = currentText;
-        
-        if (ticketLocale && ticketLocale !== agentLocale) {
-          console.log(`🌐 Translating from ${agentLocale} to ${ticketLocale}`);
-          finalText = await translateText(currentText, ticketLocale);
-          console.log(`✅ Translation completed`);
-        } else {
-          console.log(`✓ No translation needed (same locale: ${agentLocale})`);
-        }
-
-        await client.invoke('ticket.comment.appendMarkdown', finalText);
-        
-        copyBtn.textContent = "✅ Copied!";
-        setTimeout(() => {
-          copyBtn.textContent = "📋 Copy to Reply Editor";
-          copyBtn.disabled = false;
-        }, 2000);
-
-      } catch (err) {
-        console.error("Copy error:", err);
-        alert("❌ Failed to copy reply to editor");
-        copyBtn.textContent = "📋 Copy to Reply Editor";
-        copyBtn.disabled = false;
       }
     });
 

@@ -10,10 +10,6 @@ import { embedTextBatch, clearEmbeddingCache, getCacheStats } from "../services/
 import { chunkTicketData, extractTicketsFromJSON } from "../services/chunking.js";
 import { extractTextFromFile, cleanupFile } from "../services/fileProcessor.js";
 
-/**
- * Auto-import tickets from Zendesk by date range
- * OPTIMIZED: Uses batched processing with rate limiting instead of parallel queues
- */
 export async function autoImportTickets(req, res) {
   const startTime = Date.now();
   
@@ -31,17 +27,13 @@ export async function autoImportTickets(req, res) {
     console.log(`⚙️  Mode: ${mode === 'quick' ? 'Quick (no enrichment)' : 'Standard (full enrichment)'}`);
     console.log(`${'='.repeat(60)}\n`);
     
-    // Step 1: Fetch form fields first (with caching)
     console.log(`📋 Step 1: Fetching form field mappings...`);
     const fieldsMap = await fetchFormFields();
     console.log(`✅ Form fields loaded: ${Object.keys(fieldsMap).length} fields available\n`);
     
-    // Step 2: Fetch tickets
     console.log(`📡 Step 2: Fetching tickets...`);
     const tickets = await fetchTicketsByDateRange(startDate, endDate);
     console.log(`✅ Fetched ${tickets.length} tickets\n`);
-    
-    // Create import record regardless of ticket count
     const customRecord = await createZendeskImportRecord({
       startDate: startDate,
       endDate: endDate,
@@ -67,9 +59,9 @@ export async function autoImportTickets(req, res) {
     // Step 3: Enrich tickets in batches
     console.log(`🔄 Step 3: Enriching tickets...`);
     const enrichedTickets = [];
+    const failedEnrichments = [];
     const skipEnrichment = mode === 'quick';
-    
-    const ENRICHMENT_BATCH_SIZE = 10; // Process 10 at a time to avoid overwhelming Zendesk API
+    const ENRICHMENT_BATCH_SIZE = 10;
     
     for (let i = 0; i < tickets.length; i += ENRICHMENT_BATCH_SIZE) {
       const batch = tickets.slice(i, i + ENRICHMENT_BATCH_SIZE);
@@ -96,12 +88,40 @@ export async function autoImportTickets(req, res) {
               custom_fields: {}
             });
           } else {
-            // Full enrichment
-            const enriched = await enrichTicketWithComments(ticket, fieldsMap);
-            enrichedTickets.push(enriched);
+            // Full enrichment with error recovery
+            try {
+              const enriched = await enrichTicketWithComments(ticket, fieldsMap);
+              if (!enriched || typeof enriched !== 'object') {
+                throw new Error('Invalid enrichment result');
+              }
+              enrichedTickets.push(enriched);
+            } catch (enrichError) {
+              console.warn(`      ⚠️  Full enrichment failed for ticket ${ticket.id}, using fallback...`);
+              enrichedTickets.push({
+                ticket_id: ticket.id,
+                subject: ticket.subject || '',
+                description: ticket.description || '',
+                status: ticket.status,
+                priority: ticket.priority,
+                tags: ticket.tags || [],
+                created_at: ticket.created_at,
+                updated_at: ticket.updated_at,
+                conversation: [],
+                resolution: null,
+                custom_fields: {}
+              });
+              failedEnrichments.push({
+                ticketId: ticket.id,
+                error: enrichError.message
+              });
+            }
           }
         } catch (error) {
-          console.error(`      ❌ Failed to enrich ticket ${ticket.id}:`, error.message);
+          console.error(`      ❌ Failed to process ticket ${ticket.id}:`, error.message);
+          failedEnrichments.push({
+            ticketId: ticket.id,
+            error: error.message
+          });
           // Continue with next ticket
         }
       }
@@ -112,19 +132,54 @@ export async function autoImportTickets(req, res) {
       }
     }
     
+    if (failedEnrichments.length > 0) {
+      console.warn(`⚠️  ${failedEnrichments.length} tickets had enrichment issues (using fallback)\n`);
+    }
     console.log(`✅ Enriched ${enrichedTickets.length}/${tickets.length} tickets successfully\n`);
     
     // Step 4: Create chunks
     console.log(`✂️  Step 4: Creating chunks...`);
     const allChunks = [];
+    const failedChunking = [];
     
     for (const ticket of enrichedTickets) {
-      const chunks = chunkTicketData(ticket);
-      allChunks.push(...chunks.map((chunk, i) => ({
-        chunk,
-        ticketId: ticket.ticket_id,
-        chunkIndex: i
-      })));
+      try {
+        const chunks = chunkTicketData(ticket);
+        
+        if (!Array.isArray(chunks) || chunks.length === 0) {
+          console.warn(`      ⚠️  No chunks created for ticket ${ticket.ticket_id}`);
+          failedChunking.push({
+            ticketId: ticket.ticket_id,
+            reason: 'No chunks generated'
+          });
+          continue;
+        }
+        
+        allChunks.push(...chunks.map((chunk, i) => ({
+          chunk,
+          ticketId: ticket.ticket_id,
+          chunkIndex: i
+        })));
+      } catch (error) {
+        console.error(`      ❌ Chunking failed for ticket ${ticket.ticket_id}:`, error.message);
+        failedChunking.push({
+          ticketId: ticket.ticket_id,
+          error: error.message
+        });
+      }
+    }
+    
+    if (failedChunking.length > 0) {
+      console.warn(`⚠️  ${failedChunking.length} tickets failed chunking (skipped)\n`);
+    }
+    
+    if (allChunks.length === 0) {
+      console.error(`❌ No chunks generated from any ticket!`);
+      return res.status(400).json({ 
+        error: "No chunks could be generated from tickets",
+        enrichedCount: enrichedTickets.length,
+        chunksGenerated: 0
+      });
     }
     
     console.log(`✅ Created ${allChunks.length} chunks (avg ${(allChunks.length / enrichedTickets.length).toFixed(1)} per ticket)\n`);
@@ -150,38 +205,75 @@ export async function autoImportTickets(req, res) {
           }
         }
       });
+      
+      if (!Array.isArray(embeddings) || embeddings.length === 0) {
+        throw new Error('No embeddings generated');
+      }
+      
+      if (embeddings.length !== texts.length) {
+        console.warn(`⚠️  Embedding count mismatch: got ${embeddings.length}, expected ${texts.length}`);
+      }
+      
     } catch (error) {
-      console.error(`❌ Embedding failed:`, error.message);
-      throw new Error(`Embedding generation failed: ${error.message}`);
+      console.error(`❌ Embedding generation failed:`, error.message);
+      
+      // Check if it's a rate limit or API key issue
+      if (error.message.includes('429') || error.message.includes('rate')) {
+        throw new Error(`Rate limited by OpenAI API: ${error.message}`);
+      } else if (error.message.includes('401') || error.message.includes('invalid')) {
+        throw new Error(`OpenAI API authentication failed: ${error.message}`);
+      } else {
+        throw new Error(`Embedding generation failed: ${error.message}`);
+      }
     }
     
     console.log(`✅ Generated ${embeddings.length} embeddings\n`);
     
     // Step 6: Prepare vectors
     console.log(`📦 Step 6: Preparing vectors for Pinecone...`);
-    const timestamp = Date.now();
-    const vectors = embeddings.map((embedding, idx) => {
-      const { chunk, ticketId, chunkIndex } = allChunks[idx];
-      return {
-        id: `auto-ticket-${ticketId}-chunk-${chunkIndex}-${timestamp}`,
-        values: embedding,
-        metadata: {
-          ...chunk.metadata,
-          content: chunk.text,
-          source: 'auto_import',
-          importDate: new Date().toISOString(),
-          created_at: chunk.metadata?.created_at,
-          updated_at: chunk.metadata?.updated_at
+    let vectors;
+    try {
+      const timestamp = Date.now();
+      vectors = embeddings.map((embedding, idx) => {
+        const { chunk, ticketId, chunkIndex } = allChunks[idx];
+        
+        if (!embedding || embedding.length === 0) {
+          throw new Error(`Invalid embedding at index ${idx}`);
         }
-      };
-    });
-    
-    console.log(`✅ Prepared ${vectors.length} vectors\n`);
+        
+        return {
+          id: `auto-ticket-${ticketId}-chunk-${chunkIndex}-${timestamp}`,
+          values: embedding,
+          metadata: {
+            ...chunk.metadata,
+            content: chunk.text,
+            source: 'ticket_chat',
+            importDate: new Date().toISOString(),
+            created_at: chunk.metadata?.created_at,
+            updated_at: chunk.metadata?.updated_at
+          }
+        };
+      });
+      
+      if (vectors.length === 0) {
+        throw new Error('No vectors prepared');
+      }
+      
+      console.log(`✅ Prepared ${vectors.length} vectors\n`);
+    } catch (error) {
+      console.error(`❌ Vector preparation failed:`, error.message);
+      throw new Error(`Vector preparation failed: ${error.message}`);
+    }
     
     // Step 7: Upload to Pinecone
     console.log(`📤 Step 7: Uploading ${vectors.length} vectors to Pinecone...`);
-    await upsertVectors(vectors);
-    console.log(`✅ Upload complete\n`);
+    try {
+      const uploadResult = await upsertVectors(vectors);
+      console.log(`✅ Upload complete (${uploadResult?.upsertedCount || vectors.length} vectors upserted)\n`);
+    } catch (error) {
+      console.error(`❌ Pinecone upload failed:`, error.message);
+      throw new Error(`Pinecone upload failed: ${error.message}`);
+    }
     
     const processingTime = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
     const cacheStats = getCacheStats();
@@ -211,24 +303,60 @@ export async function autoImportTickets(req, res) {
     });
     
   } catch (err) {
-    console.error("\n❌ AUTO-IMPORT ERROR:", err);
+    console.error("\n" + "=".repeat(60));
+    console.error("❌ AUTO-IMPORT ERROR");
+    console.error("=".repeat(60));
+    console.error("Error Message:", err.message);
     console.error("Stack:", err.stack);
+    console.error("=".repeat(60) + "\n");
     
     // Create error record
-    const errorRecord = await createZendeskErrorImportRecord({
-      startDate: req.body?.startDate || 'N/A',
-      endDate: req.body?.endDate || 'N/A',
-      errorMessage: err.message,
-      errorDetails: err.stack || err.toString(),
-      source: 'auto_import'
-    });
-    
-    res.status(500).json({ 
-      error: "Auto-import failed", 
-      details: err.message,
-      zendeskErrorRecordId: errorRecord?.id || null
-    });
+    try {
+      const errorRecord = await createZendeskErrorImportRecord({
+        startDate: req.body?.startDate || 'N/A',
+        endDate: req.body?.endDate || 'N/A',
+        errorMessage: err.message,
+        errorDetails: err.stack || err.toString(),
+        source: 'auto_import'
+      });
+      
+      return res.status(500).json({ 
+        error: "Auto-import failed", 
+        details: err.message,
+        step: err.step || 'unknown',
+        zendeskErrorRecordId: errorRecord?.id || null,
+        suggestion: getSuggestionForError(err.message)
+      });
+    } catch (recordError) {
+      console.error("Failed to create error record:", recordError.message);
+      return res.status(500).json({ 
+        error: "Auto-import failed", 
+        details: err.message,
+        step: err.step || 'unknown',
+        suggestion: getSuggestionForError(err.message)
+      });
+    }
   }
+}
+
+/**
+ * Suggest fix based on error message
+ */
+function getSuggestionForError(message) {
+  if (message.includes('rate')) {
+    return 'Rate limited - wait a few minutes and try again';
+  } else if (message.includes('401') || message.includes('authentication')) {
+    return 'Check your API credentials (OPENAI_API_KEY, ZENDESK_API_TOKEN)';
+  } else if (message.includes('No tickets')) {
+    return 'No tickets found in the specified date range - try a different date range';
+  } else if (message.includes('chunks')) {
+    return 'Chunking failed - tickets might have invalid data';
+  } else if (message.includes('embedding')) {
+    return 'Embedding failed - check OpenAI API key and balance';
+  } else if (message.includes('Pinecone')) {
+    return 'Pinecone error - check connection and API key';
+  }
+  return 'Check the error details above';
 }
 
 /**
@@ -240,15 +368,29 @@ export async function importFile(req, res) {
   
   try {
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+      console.error("❌ No file in request");
+      console.error("Request keys:", Object.keys(req));
+      console.error("File:", req.file);
+      return res.status(400).json({ 
+        error: "No file uploaded",
+        received: {
+          hasFile: !!req.file,
+          requestKeys: Object.keys(req)
+        }
+      });
     }
 
     filePath = req.file.path;
     const fileName = req.file.originalname;
     const fileType = req.file.mimetype;
 
-    console.log(`\n📄 Processing file: ${fileName}`);
-    console.log(`📋 MIME type: ${fileType}\n`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`📄 FILE UPLOAD STARTED`);
+    console.log(`${'='.repeat(60)}`);
+    console.log(`📄 File Name: ${fileName}`);
+    console.log(`📋 MIME Type: ${fileType}`);
+    console.log(`📦 File Path: ${filePath}`);
+    console.log(`${'='.repeat(60)}\n`);
 
     const fileData = await extractTextFromFile(filePath, fileType, fileName);
     const timestamp = Date.now();
@@ -295,7 +437,7 @@ export async function importFile(req, res) {
           metadata: {
             ...chunk.metadata,
             content: chunk.text,
-            source: 'ticket_import',
+            source: 'manual_upload',
             fileName: fileName,
             uploadedAt: new Date().toISOString()
           }
@@ -338,7 +480,7 @@ export async function importFile(req, res) {
         metadata: {
           title: fileName,
           content: chunks[i],
-          source: 'file_import',
+          source: 'manual_upload',
           uploadedAt: new Date().toISOString()
         }
       }));
@@ -362,24 +504,60 @@ export async function importFile(req, res) {
     }
 
   } catch (err) {
-    console.error("❌ File import error:", err);
+    console.error("\n" + "=".repeat(60));
+    console.error("❌ FILE IMPORT ERROR");
+    console.error("=".repeat(60));
+    console.error("Error Message:", err.message);
+    console.error("Error Code:", err.code);
+    console.error("Stack:", err.stack);
+    console.error("=".repeat(60) + "\n");
 
-    const errorRecord = await createZendeskErrorImportRecord({
-      startDate: 'N/A',
-      endDate: 'N/A',
-      errorMessage: err.message,
-      errorDetails: err.stack || err.toString(),
-      source: 'file_import'
-    });
+    try {
+      const errorRecord = await createZendeskErrorImportRecord({
+        startDate: 'N/A',
+        endDate: 'N/A',
+        errorMessage: err.message,
+        errorDetails: err.stack || err.toString(),
+        source: 'file_import'
+      });
 
-    res.status(500).json({ 
-      error: "File import failed", 
-      details: err.message,
-      zendeskErrorRecordId: errorRecord?.id || null
-    });
+      return res.status(500).json({ 
+        error: "File import failed", 
+        details: err.message,
+        step: err.step || 'unknown',
+        zendeskErrorRecordId: errorRecord?.id || null,
+        suggestion: getFileUploadSuggestion(err.message)
+      });
+    } catch (recordError) {
+      console.error("Failed to create error record:", recordError.message);
+      return res.status(500).json({ 
+        error: "File import failed", 
+        details: err.message,
+        suggestion: getFileUploadSuggestion(err.message)
+      });
+    }
   } finally {
-    cleanupFile(filePath);
+    if (filePath) {
+      cleanupFile(filePath);
+    }
   }
+}
+
+function getFileUploadSuggestion(message) {
+  if (message.includes('No file')) {
+    return 'Make sure you selected a file before uploading';
+  } else if (message.includes('rate')) {
+    return 'Rate limited - wait a few minutes and try again';
+  } else if (message.includes('JSON')) {
+    return 'File must be valid JSON format if uploading tickets';
+  } else if (message.includes('embedding')) {
+    return 'Embedding failed - check OpenAI API key and balance';
+  } else if (message.includes('Pinecone')) {
+    return 'Pinecone error - check connection and API key';
+  } else if (message.includes('file')) {
+    return 'File may be corrupted or in unsupported format';
+  }
+  return 'Check the error details above';
 }
 
 /**
@@ -497,5 +675,62 @@ export async function clearCache(req, res) {
   } catch (err) {
     console.error("❌ Cache clear error:", err);
     res.status(500).json({ error: "Failed to clear cache", details: err.message });
+  }
+}
+
+/**
+ * Test pagination - fetches tickets without chunking/embedding
+ * Useful for testing large date ranges and pagination
+ */
+export async function testPagination(req, res) {
+  const startTime = Date.now();
+  
+  try {
+    const { startDate, endDate } = req.body;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: "startDate and endDate are required" });
+    }
+    
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🧪 PAGINATION TEST STARTED`);
+    console.log(`${'='.repeat(60)}`);
+    console.log(`📅 Date Range: ${startDate} to ${endDate}`);
+    console.log(`${'='.repeat(60)}\n`);
+    
+    // Only fetch tickets - no chunking, no embedding
+    console.log(`📡 Fetching tickets...`);
+    const tickets = await fetchTicketsByDateRange(startDate, endDate);
+    
+    const processingTime = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
+    
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`✅ PAGINATION TEST COMPLETED`);
+    console.log(`${'='.repeat(60)}`);
+    console.log(`📊 Results:`);
+    console.log(`   • Total Tickets: ${tickets.length}`);
+    console.log(`   • Processing Time: ${processingTime}`);
+    console.log(`   • Avg per ticket: ${((Date.now() - startTime) / Math.max(tickets.length, 1)).toFixed(0)}ms`);
+    console.log(`${'='.repeat(60)}\n`);
+    
+    return res.json({
+      status: "Pagination test completed",
+      ticketsCount: tickets.length,
+      processingTime: processingTime,
+      dateRange: {
+        start: startDate,
+        end: endDate
+      },
+      avgTimePerTicket: `${((Date.now() - startTime) / Math.max(tickets.length, 1)).toFixed(0)}ms`
+    });
+  } catch (err) {
+    const processingTime = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
+    console.error("❌ Pagination test error:", err.message);
+    
+    res.status(500).json({
+      status: "Pagination test failed",
+      error: err.message,
+      processingTime: processingTime
+    });
   }
 }

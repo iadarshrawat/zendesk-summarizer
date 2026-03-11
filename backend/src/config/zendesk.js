@@ -29,52 +29,117 @@ export function createZendeskClient() {
   });
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+
 /**
- * Fetch tickets by date range
+ * Fetch tickets using SEARCH API with DATE FILTERING
+ * Handles Zendesk's 1000 ticket limit by rolling the start date
  */
 export async function fetchTicketsByDateRange(startDate, endDate) {
   const zendeskClient = createZendeskClient();
-  const allTickets = [];
-  
-  const formatDate = (dateStr) => {
-    const date = new Date(dateStr);
-    return date.toISOString().split('T')[0];
-  };
-  
-  const startFormatted = formatDate(startDate);
+
+  const formatDate = (dateStr) => new Date(dateStr).toISOString().split('T')[0];
+
+  let currentStart = formatDate(startDate);
   const endFormatted = formatDate(endDate);
-  
-  console.log(`📅 Fetching tickets from ${startFormatted} to ${endFormatted}`);
-  
-  const query = `type:ticket created>=${startFormatted} created<=${endFormatted}`;
-  const encodedQuery = encodeURIComponent(query);
-  
-  let nextUrl = `/search.json?query=${encodedQuery}&sort_by=created_at&sort_order=desc`;
-  let page = 1;
-  
-  while (nextUrl) {
-    console.log(`📄 Fetching page ${page}...`);
-    
-    try {
-      const response = await zendeskClient.get(nextUrl);
-      const tickets = response.data.results || [];
-      
-      console.log(`✓ Found ${tickets.length} tickets on page ${page}`);
-      allTickets.push(...tickets);
-      
-      nextUrl = response.data.next_page || null;
-      page++;
-      
-      if (nextUrl) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+
+  console.log(`📅 Fetching tickets from ${currentStart} → ${endFormatted}`);
+
+  let allTickets = [];
+  let batchCount = 0;
+
+  while (true) {
+    batchCount++;
+    console.log(`\n🔄 Batch ${batchCount} | Range: ${currentStart} → ${endFormatted}`);
+
+    const query = `type:ticket created>=${currentStart} created<=${endFormatted}`;
+    const encodedQuery = encodeURIComponent(query);
+
+    let page = 1;
+    let batchTickets = [];
+    let lastTicketTimestamp = null;
+    let hitPageLimit = false;
+
+    // Paginate up to page 10 (max 1000 tickets)
+    while (page <= 10) {
+      console.log(`   📄 Page ${page}...`);
+
+      try {
+        const res = await zendeskClient.get(
+          `/search.json?query=${encodedQuery}&sort_by=created_at&sort_order=asc&page=${page}&per_page=100`
+        );
+
+        const results = res.data.results || [];
+        console.log(`      ✓ ${results.length} tickets`);
+
+        batchTickets.push(...results);
+
+        if (results.length > 0) {
+          lastTicketTimestamp = results[results.length - 1].created_at;
+        }
+
+        // Less than 100 results = last page, we're done
+        if (results.length < 100) {
+          console.log(`      ✓ Last page reached`);
+          break;
+        }
+
+        // Hit page 10 = about to hit 1000 limit, roll timestamp
+        if (page === 10) {
+          console.log(`   ⚠️  Reached page 10 (1000 ticket limit) → rolling timestamp`);
+          hitPageLimit = true;
+          break;
+        }
+
+        page++;
+        await sleep(300);
+
+      } catch (err) {
+        if (err.response?.status === 429) {
+          const wait = parseInt(err.response.headers?.['retry-after'] || 60) * 1000;
+          console.warn(`   ⚠️ Rate limited → waiting ${wait / 1000}s`);
+          await sleep(wait);
+          continue;
+        }
+
+        console.error(`   ❌ Error on page ${page}:`, err.message);
+        break;
       }
-    } catch (err) {
-      console.error(`❌ Error fetching page ${page}:`, err.message);
+    }
+
+    console.log(`   ✅ Batch fetched: ${batchTickets.length} tickets`);
+    allTickets.push(...batchTickets);
+
+    // If we didn't hit the limit, we're fully done
+    if (!hitPageLimit) {
+      console.log(`\n✅ All tickets fetched`);
+      break;
+    }
+
+    // Roll the timestamp to the last ticket's created_at + 1 second
+    if (lastTicketTimestamp) {
+      const nextStart = new Date(new Date(lastTicketTimestamp).getTime() + 1000);
+      currentStart = nextStart.toISOString().split('T')[0];
+
+      console.log(`   🔄 Rolling start date to: ${currentStart}`);
+
+      // Safety: if rolled date exceeds end date, stop
+      if (new Date(currentStart) > new Date(endFormatted)) {
+        console.log(`   ✓ Rolled past end date → done`);
+        break;
+      }
+
+      await sleep(500);
+    } else {
+      // No tickets found, stop
       break;
     }
   }
-  
-  console.log(`✅ Total tickets fetched: ${allTickets.length}`);
+
+  console.log(`\n✅ Total tickets fetched: ${allTickets.length}`);
   return allTickets;
 }
 
@@ -84,7 +149,7 @@ export async function fetchTicketsByDateRange(startDate, endDate) {
 let formFieldsCache = null;
 
 /**
- * Fetch all ticket form fields
+ * Fetch all ticket form fields with retry logic for rate limiting
  */
 export async function fetchFormFields() {
   // Return cached fields if available
@@ -95,6 +160,9 @@ export async function fetchFormFields() {
 
   const zendeskClient = createZendeskClient();
   const fieldsMap = {};
+  const MAX_RETRIES = 5;
+  const INITIAL_RETRY_DELAY = 2000;
+  const RATE_LIMIT_DELAY = 120000; // 2 minutes for 429 errors
   
   try {
     console.log(`📋 Fetching ticket form fields...`);
@@ -104,33 +172,114 @@ export async function fetchFormFields() {
     let totalFields = 0;
     
     while (nextUrl) {
-      try {
-        const response = await zendeskClient.get(nextUrl);
-        const fields = response.data.ticket_fields || [];
-        
-        // Map field ID to field details (id, title, type, description)
-        for (const field of fields) {
-          fieldsMap[field.id] = {
-            id: field.id,
-            title: field.title,
-            type: field.type,
-            description: field.description || '',
-            system: field.system,
-            key: field.key || ''
-          };
+      let retryCount = 0;
+      let success = false;
+      let lastError = null;
+      
+      while (retryCount < MAX_RETRIES && !success) {
+        try {
+          const response = await zendeskClient.get(nextUrl);
+          const fields = response.data.ticket_fields || [];
+          
+          // Map field ID to field details (id, title, type, description)
+          for (const field of fields) {
+            fieldsMap[field.id] = {
+              id: field.id,
+              title: field.title,
+              type: field.type,
+              description: field.description || '',
+              system: field.system,
+              key: field.key || ''
+            };
+          }
+          
+          totalFields += fields.length;
+          console.log(`   ✓ Fetched ${fields.length} fields on page ${page}`);
+          
+          nextUrl = response.data.next_page || null;
+          page++;
+          success = true;
+          
+          // Delay between pages
+          if (nextUrl) {
+            await sleep(500);
+          }
+          
+        } catch (err) {
+          lastError = err;
+          const status = err.response?.status;
+          const retryAfter = err.response?.headers?.['retry-after'];
+          
+          // Handle rate limiting (429 Too Many Requests)
+          if (status === 429) {
+            retryCount++;
+            
+            // For 429 errors, wait 2 minutes (120 seconds) to reset quota
+            let retryDelay = RATE_LIMIT_DELAY;
+            if (retryAfter) {
+              retryDelay = Math.max(retryDelay, parseInt(retryAfter) * 1000);
+            }
+            
+            console.warn(`⚠️  Rate limited fetching form fields (attempt ${retryCount}/${MAX_RETRIES})`);
+            console.warn(`   ⏰ Waiting 2 minutes (120 seconds) to reset quota...`);
+            
+            await sleep(retryDelay);
+            
+            if (retryCount < MAX_RETRIES) {
+              console.log(`🔄 Retrying form fields fetch...`);
+            }
+          }
+          // Handle validation errors (422 Unprocessable Entity) - wait once then retry
+          else if (status === 422) {
+            console.warn(`⚠️  Validation error fetching form fields`);
+            console.warn(`   Status: 422 (Unprocessable Entity)`);
+            console.warn(`   Error: ${err.response?.data?.error?.message || err.message}`);
+            console.warn(`   ⏰ Waiting 2 minutes before retrying...`);
+            
+            await sleep(RATE_LIMIT_DELAY); // Wait 2 minutes
+            
+            console.log(`🔄 Retrying form fields fetch...`);
+            // After 2-minute wait, retry once more (don't count as attempt)
+          }
+          // Handle server errors
+          else if (status >= 500) {
+            retryCount++;
+            const retryDelay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount - 1);
+            
+            console.warn(`⚠️  Server error ${status} fetching form fields (attempt ${retryCount}/${MAX_RETRIES})`);
+            console.warn(`   Waiting ${(retryDelay / 1000).toFixed(1)} seconds before retry...`);
+            
+            await sleep(retryDelay);
+            
+            if (retryCount < MAX_RETRIES) {
+              console.log(`🔄 Retrying form fields fetch...`);
+            }
+          }
+          // Handle network errors
+          else if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ENOTFOUND') {
+            retryCount++;
+            const retryDelay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount - 1);
+            
+            console.warn(`⚠️  Network error: ${err.code} fetching form fields (attempt ${retryCount}/${MAX_RETRIES})`);
+            console.warn(`   Waiting ${(retryDelay / 1000).toFixed(1)} seconds before retry...`);
+            
+            await sleep(retryDelay);
+            
+            if (retryCount < MAX_RETRIES) {
+              console.log(`🔄 Retrying form fields fetch...`);
+            }
+          }
+          // Other errors - don't retry
+          else {
+            console.error(`❌ Unrecoverable error fetching form fields:`, err.message);
+            success = false;
+            break;
+          }
         }
-        
-        totalFields += fields.length;
-        console.log(`   ✓ Fetched ${fields.length} fields on page ${page}`);
-        
-        nextUrl = response.data.next_page || null;
-        page++;
-        
-        if (nextUrl) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      } catch (err) {
-        console.error(`❌ Error fetching page ${page}:`, err.message);
+      }
+      
+      if (!success && retryCount >= MAX_RETRIES) {
+        console.error(`❌ Failed to fetch form fields after ${MAX_RETRIES} retries`);
         break;
       }
     }
@@ -196,18 +345,80 @@ export function mapTicketCustomFields(ticket, fieldsMap) {
 }
 
 /**
- * Fetch ticket comments
+ * Fetch ticket comments with retry logic for rate limiting
  */
 export async function fetchTicketComments(ticketId) {
   const zendeskClient = createZendeskClient();
+  const MAX_RETRIES = 5;
+  const INITIAL_RETRY_DELAY = 500; // Shorter delay for comments (less critical)
+  const RATE_LIMIT_DELAY = 120000; // 2 minutes for 429 errors
   
-  try {
-    const response = await zendeskClient.get(`/tickets/${ticketId}/comments.json`);
-    return response.data.comments || [];
-  } catch (err) {
-    console.error(`❌ Error fetching comments for ticket ${ticketId}:`, err.message);
-    return [];
+  let retryCount = 0;
+  let lastError = null;
+  
+  while (retryCount < MAX_RETRIES) {
+    try {
+      const response = await zendeskClient.get(`/tickets/${ticketId}/comments.json`);
+      return response.data.comments || [];
+      
+    } catch (err) {
+      lastError = err;
+      const status = err.response?.status;
+      const retryAfter = err.response?.headers?.['retry-after'];
+      
+      // Handle rate limiting (429)
+      if (status === 429) {
+        retryCount++;
+        
+        // For 429 errors, wait 2 minutes (120 seconds) to reset quota
+        let retryDelay = RATE_LIMIT_DELAY;
+        if (retryAfter) {
+          retryDelay = Math.max(retryDelay, parseInt(retryAfter) * 1000);
+        }
+        
+        if (retryCount <= 1) { // Only log first attempt
+          console.warn(`⚠️  Rate limited fetching comments for ticket ${ticketId}`);
+          console.warn(`   ⏰ Waiting 2 minutes (120 seconds) to reset quota...`);
+        }
+        
+        await sleep(retryDelay);
+        continue;
+      }
+      // Handle server errors
+      else if (status >= 500) {
+        retryCount++;
+        const retryDelay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount - 1);
+        
+        if (retryCount <= 2) {
+          console.warn(`⚠️  Server error ${status} fetching comments for ticket ${ticketId} (attempt ${retryCount}/${MAX_RETRIES})`);
+        }
+        
+        await sleep(retryDelay);
+        continue;
+      }
+      // Handle network errors
+      else if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ENOTFOUND') {
+        retryCount++;
+        const retryDelay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount - 1);
+        
+        if (retryCount <= 2) {
+          console.warn(`⚠️  Network error: ${err.code} fetching comments for ticket ${ticketId} (attempt ${retryCount}/${MAX_RETRIES})`);
+        }
+        
+        await sleep(retryDelay);
+        continue;
+      }
+      // For other errors, return empty array (don't fail the entire import)
+      else {
+        console.error(`❌ Error fetching comments for ticket ${ticketId}:`, err.message);
+        return [];
+      }
+    }
   }
+  
+  // If we exhausted retries
+  console.error(`❌ Failed to fetch comments for ticket ${ticketId} after ${MAX_RETRIES} retries`);
+  return [];
 }
 
 /**

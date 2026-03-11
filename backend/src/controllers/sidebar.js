@@ -1,4 +1,4 @@
-import { generateContent } from "../config/gemini.js";
+import { generateContent } from "../config/openai.js";
 import { buildSummaryPrompt, buildTranslationPrompt } from "../utils/prompts.js";
 
 /**
