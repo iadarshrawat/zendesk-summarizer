@@ -7,6 +7,7 @@ import { createCustomObjectType } from "./src/config/zendesk.js";
 import navbarRoutes from "./src/routes/navbar.route.js";
 import sidebarRoutes from "./src/routes/sidebar.route.js";
 import editorRoutes from "./src/routes/editor.route.js";
+import sunshineRoutes from "./src/routes/sunshine.route.js";
 
 dotenv.config();
 
@@ -28,6 +29,9 @@ app.use(sidebarRoutes);
 
 // Editor routes (Reply functionality)
 app.use(editorRoutes);
+
+// Sunshine routes (Chat widget functionality)
+app.use(sunshineRoutes);
 
 /* ================= UTILITY ENDPOINTS ================= */
 
