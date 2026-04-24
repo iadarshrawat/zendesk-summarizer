@@ -22,32 +22,25 @@ export async function composeReply(req, res) {
     // Build brand filter if brand is provided
     const filter = ticket.brand ? { brand: { $eq: ticket.brand } } : null;
 
-    // ==================== PHASE 1: Search manually uploaded KB first ====================
-    console.log("📚 PHASE 1: Searching manually uploaded knowledge base...");
-    
+    // PHASE 1: Search manually uploaded KB first
     const kbFilter = filter ? { ...filter, source: { $eq: "manual_upload" } } : { source: { $eq: "manual_upload" } };
     const kbResults = await queryVectors(queryEmbedding, 10, true, kbFilter);
     
     // Filter results with good relevance score (cosine > 0.7)
     const relevantKBMatches = kbResults.matches.filter(m => m.score >= 0.7);
-    console.log(`✅ Found ${relevantKBMatches.length} relevant KB articles (score >= 0.7)`);
 
     let finalResults = null;
     let searchSource = "manual_kb";
 
     if (relevantKBMatches.length > 0) {
-      // ✅ Use manually uploaded KB results
+      // Use manually uploaded KB results
       finalResults = { matches: relevantKBMatches.slice(0, 5) };
-      console.log("✅ Using manually uploaded KB for reply generation");
     } else {
-      // ==================== PHASE 2: Fall back to ticket conversations if KB not sufficient ====================
-      console.log("⚠️  PHASE 2: No good KB matches found. Searching ticket conversations...");
-      
+      // PHASE 2: Fall back to ticket conversations if KB not sufficient
       const chatFilter = filter ? { ...filter, source: { $eq: "ticket_chat" } } : { source: { $eq: "ticket_chat" } };
       const chatResults = await queryVectors(queryEmbedding, 10, true, chatFilter);
       
       const relevantChatMatches = chatResults.matches.filter(m => m.score >= 0.6);
-      console.log(`✅ Found ${relevantChatMatches.length} relevant chat conversations (score >= 0.6)`);
       
       finalResults = { matches: relevantChatMatches.slice(0, 5) };
       searchSource = "ticket_chat";
@@ -60,7 +53,6 @@ export async function composeReply(req, res) {
       .join("\n\n") || "No relevant knowledge found.";
 
     const prompt = buildReplyPrompt(ticket, ticket.tone || "professional", kbChunks);
-    console.log("📝 Generating reply for ticket:", ticket.ticketId, `[Brand: ${ticket.brand || 'default'}, Source: ${searchSource}]`);
 
     const replyText = await generateContent(prompt, {
       temperature: 0.7,
@@ -122,13 +114,10 @@ export async function debugSearch(req, res) {
 export async function translateText(req, res) {
   try {
     const { text, targetLanguage } = req.body;
-    console.log(`🌐 Received translation request to ${targetLanguage} and ${text}`);
 
     if (!text || !targetLanguage) {
       return res.status(400).json({ error: "text and targetLanguage are required" });
     }
-
-    console.log(`🌐 Translating text to ${targetLanguage}...`);
 
     const prompt = buildTranslationPrompt(text, targetLanguage);
 
@@ -138,10 +127,6 @@ export async function translateText(req, res) {
       topK: 40,
     });
 
-    console.log(`✅ Translation completed`);
-
-    console.log(`🌐 Translated Text: ${translatedText}`);
-
     res.json({
       originalText: text,
       translatedText: translatedText.trim(),
@@ -149,7 +134,7 @@ export async function translateText(req, res) {
     });
 
   } catch (err) {
-    console.error("❌ Translation error:", err);
+    console.error("Translation error:", err);
     res.status(500).json({ 
       error: "Translation failed", 
       details: err.message 

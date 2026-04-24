@@ -77,6 +77,40 @@ export async function getAvailableAgentsInGroup(groupId) {
 }
 
 /**
+ * Create or get Zendesk user by email
+ * If user doesn't exist, create a new end-user
+ */
+export async function createOrGetUserByEmail(name, email) {
+  try {
+    const client = getZendeskClient();
+
+    // First try to find existing user
+    const searchResponse = await client.get("/users/search", {
+      params: { query: `email:${email}` }
+    });
+
+    if (searchResponse.data.users && searchResponse.data.users.length > 0) {
+      return searchResponse.data.users[0];
+    }
+
+    // User doesn't exist, create one
+    const createResponse = await client.post("/users", {
+      user: {
+        name: name,
+        email: email,
+        role: "end-user"
+      }
+    });
+
+    return createResponse.data.user;
+
+  } catch (err) {
+    console.error("Failed to create/get user:", err.response?.data || err.message);
+    throw err;
+  }
+}
+
+/**
  * Create a new Zendesk ticket
  */
 export async function createTicket(ticketData) {
@@ -87,31 +121,58 @@ export async function createTicket(ticketData) {
 
     const client = getZendeskClient();
 
+    // Build requester object or ID
+    let requesterPayload;
+
+    if (ticketData.requester && ticketData.requester.email) {
+      try {
+        // Try to create or get user with the email
+        const user = await createOrGetUserByEmail(
+          ticketData.requester.name || ticketData.requester.email.split("@")[0],
+          ticketData.requester.email
+        );
+        // Use user ID as requester
+        requesterPayload = { requester_id: user.id };
+      } catch (userErr) {
+        console.warn("Could not create/get user, falling back to email requester:", userErr.message);
+        // Fallback to email-based requester
+        requesterPayload = {
+          requester: {
+            name: ticketData.requester.name || ticketData.requester.email.split("@")[0],
+            email: ticketData.requester.email
+          }
+        };
+      }
+    } else {
+      // Use default requester
+      requesterPayload = {
+        requester: {
+          name: "Customer",
+          email: process.env.ZENDESK_EMAIL
+        }
+      };
+    }
+
     const payload = {
       ticket: {
         subject: ticketData.subject,
         description: ticketData.description,
-        requester: ticketData.requester || {
-          name: "Customer",
-          email: process.env.ZENDESK_EMAIL
-        },
+        ...requesterPayload,
         group_id: ticketData.group_id || process.env.ZENDESK_SUPPORT_GROUP_ID,
         priority: ticketData.priority || "normal",
+        status: ticketData.status || "new",
         tags: ticketData.tags || [],
         custom_fields: ticketData.custom_fields || {}
       }
     };
 
-    console.log(`🎫 Creating ticket: "${ticketData.subject}"`);
-
     const response = await client.post("/tickets", payload);
     const ticket = response.data.ticket;
 
-    console.log(`✅ Ticket created: #${ticket.id}`);
     return ticket;
 
   } catch (err) {
-    console.error("❌ Failed to create ticket:", err.message);
+    console.error("Failed to create ticket:", err.response?.data || err.message);
     throw err;
   }
 }
@@ -128,11 +189,10 @@ export async function updateTicket(ticketId, updateData) {
     };
 
     const response = await client.put(`/tickets/${ticketId}`, payload);
-    console.log(`✅ Ticket #${ticketId} updated`);
     return response.data.ticket;
 
   } catch (err) {
-    console.error("❌ Failed to update ticket:", err.message);
+    console.error("Failed to update ticket:", err.message);
     throw err;
   }
 }
@@ -154,11 +214,10 @@ export async function addTicketComment(ticketId, comment, isPublic = true) {
     };
 
     const response = await client.put(`/tickets/${ticketId}`, payload);
-    console.log(`✅ Comment added to ticket #${ticketId}`);
     return response.data.ticket;
 
   } catch (err) {
-    console.error("❌ Failed to add comment:", err.message);
+    console.error("Failed to add comment:", err.message);
     throw err;
   }
 }
@@ -179,11 +238,10 @@ export async function linkConversationToTicket(ticketId, conversationId, customF
     };
 
     const ticket = await updateTicket(ticketId, updateData);
-    console.log(`✅ Linked conversation ${conversationId} to ticket #${ticketId}`);
     return ticket;
 
   } catch (err) {
-    console.error("❌ Failed to link conversation:", err.message);
+    console.error("Failed to link conversation:", err.message);
     throw err;
   }
 }
@@ -197,7 +255,7 @@ export async function getTicket(ticketId) {
     const response = await client.get(`/tickets/${ticketId}`);
     return response.data.ticket;
   } catch (err) {
-    console.error("❌ Failed to fetch ticket:", err.message);
+    console.error("Failed to fetch ticket:", err.message);
     throw err;
   }
 }
@@ -224,3 +282,55 @@ export async function getTicketByConversationId(conversationId, customFieldId = 
     throw err;
   }
 }
+
+/**
+ * Merge two Zendesk users
+ * Merges sourceUserId into targetUserId
+ * All associations of sourceUser are transferred to targetUser
+ */
+export async function mergeUsers(sourceUserId, targetUserId) {
+  try {
+    if (sourceUserId === targetUserId) {
+      console.log(`ℹ️ Source and target users are the same, no merge needed`);
+      return { merged: false, reason: "Same user" };
+    }
+
+    const client = getZendeskClient();
+
+    // Merge sourceUser into targetUser
+    const payload = {
+      user: {
+        id: targetUserId
+      }
+    };
+
+    const response = await client.put(`/users/${sourceUserId}/merge`, payload);
+    
+    console.log(`✅ Merged user ${sourceUserId} into ${targetUserId}`);
+    return { 
+      merged: true, 
+      sourceUserId, 
+      targetUserId,
+      result: response.data
+    };
+
+  } catch (err) {
+    console.error(`❌ Failed to merge users:`, err.response?.data || err.message);
+    throw err;
+  }
+}
+
+/**
+ * Get user details by ID
+ */
+export async function getUser(userId) {
+  try {
+    const client = getZendeskClient();
+    const response = await client.get(`/users/${userId}`);
+    return response.data.user;
+  } catch (err) {
+    console.error(`❌ Failed to fetch user:`, err.message);
+    throw err;
+  }
+}
+

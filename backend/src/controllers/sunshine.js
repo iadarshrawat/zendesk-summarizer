@@ -9,9 +9,18 @@ import dotenv from "dotenv";
 import { generateContent } from "../config/openai.js";
 import { queryVectors } from "../config/pinecone.js";
 import { embedText } from "../services/embedding.js";
-import { buildReplyBotPrompt, buildReplyPrompt } from "../utils/prompts.js";
+import { buildReplyBotPrompt } from "../utils/prompts.js";
+import { updateTicket, getTicket } from "../services/ticketManager.js";
 
 dotenv.config();
+
+// Track form collection status - store conversation ID and form data
+// Used to collect customer details before creating a ticket
+const conversationFormData = new Map();
+
+// Track escalated conversations - store conversation IDs where agent has taken control
+// Used to prevent bot from replying after escalation
+const escalatedConversations = new Set();
 
 /**
  * Create Sunshine Conversations API client
@@ -20,161 +29,373 @@ dotenv.config();
  */
 function createSunshineClient() {
   if (!process.env.SUNSHINE_KEY_ID || !process.env.SUNSHINE_KEY_SECRET) {
-    throw new Error("Zendesk Sunshine credentials not configured. Need SUNSHINE_KEY_ID and SUNSHINE_KEY_SECRET");
+    throw new Error(
+      "Zendesk Sunshine credentials not configured. Need SUNSHINE_KEY_ID and SUNSHINE_KEY_SECRET",
+    );
   }
 
   return axios.create({
     baseURL: `https://api.smooch.io/v2`,
     headers: {
-      'Content-Type': 'application/json'
+      "Content-Type": "application/json",
     },
     auth: {
       username: process.env.SUNSHINE_KEY_ID,
-      password: process.env.SUNSHINE_KEY_SECRET
-    }
+      password: process.env.SUNSHINE_KEY_SECRET,
+    },
   });
 }
 
 /**
- * Handle incoming message from Zendesk Sunshine webhook
- * Zendesk sends: account_id, event (with message, conversation_id), type, etc.
+ * Handle incoming message from Zendesk Sunshine webhook (v2 format)
+ * New format: { app, webhook, events: [{ type, payload: { conversation, message } }] }
  */
 export async function handleSunshineMessage(req, res) {
   try {
-    console.log("📨 Zendesk webhook received:", JSON.stringify(req.body, null, 2));
-
     const payload = req.body;
 
-    // Extract from Zendesk's webhook structure
-    if (!payload.event || !payload.event.message || !payload.event.conversation_id) {
-      console.error("❌ Missing required fields. Payload:", payload);
-      return res.status(400).json({ 
-        error: "Invalid payload structure",
-        expected: "event.message.body, event.conversation_id, event.actor"
-      });
-    }
-
-    const conversationId = payload.event.conversation_id;
-    const messageBody = payload.event.message.body;
-    const messageId = payload.event.message.id;
-    const actor = payload.event.actor;
-
-    // Skip if this is a bot/system/agent message (don't reply to our own replies)
-    if (
-      actor.type === "system" || 
-      actor.type === "business" ||
-      actor.id?.includes("bot") || 
-      actor.id?.includes("answerBot")
-    ) {
-      console.log("⏭️ Skipping system/bot/agent message");
-      return res.status(200).json({ success: true, skipped: true, reason: "Non-user message" });
-    }
-
-    // Only process end_user messages
-    if (actor.type !== "end_user") {
-      console.log(`⏭️ Skipping message from actor type: ${actor.type}`);
-      return res.status(200).json({ success: true, skipped: true, reason: `Actor type: ${actor.type}` });
-    }
-
+    console.log("Received Sunshine webhook:", JSON.stringify(payload, null, 2));
+    
+    console.log("Received 1");
     // Send 200 immediately so Zendesk doesn't timeout
     res.status(200).json({ success: true, received: true });
 
-    console.log(`💬 Processing message: "${messageBody}"`);
+    console.log("Received 2");
 
-    // Default values
-    const userName = actor.name || "Customer";
-    const brand = "default_brand";
-
-    // Step 1: Generate embedding for the customer message
-    let messageEmbedding;
-    try {
-      messageEmbedding = await embedText(messageBody);
-    } catch (err) {
-      console.error("❌ Embedding error:", err.message);
-      messageEmbedding = null;
+    // Check if we have events
+    if (!payload.events || !Array.isArray(payload.events) || payload.events.length === 0) {
+      console.error("Missing events in webhook payload");
+      return;
     }
 
-    // Step 2: Search knowledge base (2-phase search)
-    let selectedArticles = [];
-
-    if (messageEmbedding) {
+    setImmediate(async () => {
       try {
-        // PHASE 1: Search manually uploaded KB with higher threshold (0.7)
-        const phase1Results = await queryVectors(
-          messageEmbedding,
-          10,
-          { source: "manual_upload", brand: brand }
-        );
+        for (const event of payload.events) {
+          console.log("lskjdhfslkjfdhskdfjhsaldkfjhs@@@@@@@@@@@@@@@@")
+          try {
+            // Handle ticket creation event (when agent accepts escalation)
+            if (event.type === "conversation:updatedmetadata") {
 
-        const phase1Filtered = phase1Results.filter(r => r.score >= 0.7);
+              console.log("Handling conversation:updatedmetadata event");
+              const conversationId = event.payload.conversation?.id;
+              const metadata = event.payload.conversation?.metadata;
+              const ticketId = metadata?.["zd:ticket"]?.id;
 
-        if (phase1Filtered.length > 0) {
-          selectedArticles = phase1Filtered.slice(0, 5);
-          console.log(`✅ PHASE 1 (Manual KB) found ${phase1Filtered.length} results`);
-        } else {
-          // PHASE 2: Fall back to ticket conversations with lower threshold (0.6)
-          console.log(`⏳ PHASE 1 found no results, trying PHASE 2...`);
-          const phase2Results = await queryVectors(
-            messageEmbedding,
-            10,
-            { source: "ticket_chat", brand: brand }
-          );
+              if (ticketId && conversationId) {
+                try {
+                  // Get stored form data for this conversation
+                  const formData = conversationFormData.get(conversationId);
+                  
+                  if (formData && formData.data) {
+                    const { name, email } = formData.data;
+                    
+                    // Verify and update ticket with customer information
+                    console.log(`✅ Ticket ${ticketId} created with customer: ${name} (${email})`);
+                    
+                    // Get ticket to verify it has correct requester
+                    const ticket = await getTicket(ticketId);
+                    console.log(`� Ticket requester ID: ${ticket.requester_id}`);
+                    
+                  } else {
+                    console.log(`ℹ️ Ticket ${ticketId} created but no form data found for conversation ${conversationId}`);
+                  }
+                  
+                  // Clean up stored form data after ticket is created
+                  conversationFormData.delete(conversationId);
+                  
+                } catch (err) {
+                  console.error("Could not process ticket:", err.message);
+                }
+              }
+              
+              continue;
+            }
 
-          const phase2Filtered = phase2Results.filter(r => r.score >= 0.6);
-          if (phase2Filtered.length > 0) {
-            selectedArticles = phase2Filtered.slice(0, 5);
-            console.log(`✅ PHASE 2 (Ticket Chat) found ${phase2Filtered.length} results`);
-          } else {
-            console.log(`⚠️ PHASE 2 also found no results`);
+            // Only process conversation:message events
+            if (event.type !== "conversation:message") {
+              continue;
+            }
+
+            if (!event.payload || !event.payload.conversation || !event.payload.message) {
+              console.error("Missing payload fields in event");
+              continue;
+            }
+
+            const conversationId = event.payload.conversation.id;
+            const messageBody = event.payload.message.content?.text;
+            const author = event.payload.message.author;
+
+            // Active switchboard integration
+            const activeSwitchboardIntegration = 
+              event.payload.conversation?.activeSwitchboardIntegration?.id ||
+              event.payload.conversation?.activeSwitchboardIntegration?.name;
+
+            // Check if agent has taken control - if so, skip bot processing
+            const isAgentActive = activeSwitchboardIntegration && 
+              (activeSwitchboardIntegration.includes("agentWorkspace") || 
+               activeSwitchboardIntegration === "zd-agentWorkspace" ||
+               activeSwitchboardIntegration.includes("agent"));
+            
+            // Also check if we previously escalated this conversation
+            const isEscalated = escalatedConversations.has(conversationId);
+
+            const userName = author.displayName || "Customer";
+
+            // Skip bot/system/agent messages
+            if (
+              author.type === "business" ||
+              author.displayName?.includes("BOT") ||
+              author.displayName?.includes("bot") ||
+              author.subtypes?.includes("AI")
+            ) {
+              continue;
+            }
+
+            // Only process customer/user messages
+            if (author.type !== "user" && author.type !== "end_user") {
+              continue;
+            }
+
+            // Check if this is a form submission
+            if (event.payload.message.content?.type === "formResponse" && event.payload.message.content?.fields) {
+              const fields = event.payload.message.content.fields || [];
+              
+              // Extract form fields by name
+              const customerName = fields.find(f => f.name === "name")?.text || userName || "Customer";
+              const customerEmail = fields.find(f => f.name === "email")?.email || process.env.ZENDESK_EMAIL;
+              const issueCategory = fields.find(f => f.name === "category")?.select?.[0]?.name || "general";
+              const issueDescription = fields.find(f => f.name === "description")?.text || "No description provided";
+              
+              // Get WebUser ID from the message author
+              const webUserId = author.userId;
+         
+              // Store form data temporarily for quick reply action handling
+              conversationFormData.set(conversationId, {
+                status: "form_submitted",
+                data: {
+                  name: customerName,
+                  email: customerEmail,
+                  category: issueCategory,
+                  description: issueDescription,
+                  webUserId: webUserId
+                },
+                submittedAt: Date.now()
+              });
+              
+              // Send quick reply with two options
+              try {
+                const sunshineClient = createSunshineClient();
+
+                const quickReplyPayload = {
+                  author: {
+                    type: "business",
+                  },
+                  content: {
+                    type: "text",
+                    text: `Thank you ${customerName}! Would you like to escalate to a human agent to discuss your ${issueCategory} issue?`,
+                    actions: [
+                      {
+                        type: "reply",
+                        text: "✅ Yes, Connect me to Agent",
+                        payload: "ESCALATE_TO_AGENT"
+                      },
+                      {
+                        type: "reply",
+                        text: "❌ No, Cancel",
+                        payload: "CANCEL_ESCALATION"
+                      }
+                    ]
+                  },
+                };
+
+                const response = await sunshineClient.post(
+                  `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages`,
+                  quickReplyPayload,
+                );
+              } catch (quickReplyErr) {
+                console.error("Failed to send quick reply:", quickReplyErr.message);
+              }
+              
+              continue;
+            }
+
+            // Now check for messageBody only for non-form messages
+            if (!messageBody) {
+              continue;
+            }
+
+            // ✅ Check if this is a quick reply payload (ESCALATE_TO_AGENT or CANCEL_ESCALATION)
+            if (messageBody === "ESCALATE_TO_AGENT" || messageBody === "✅ Yes, Connect me to Agent") {
+              const formData = conversationFormData.get(conversationId);
+              if (!formData || !formData.data) {
+                console.error(`No form data found for escalation`);
+                try {
+                  await sendSunshineMessage(conversationId, "Sorry, I couldn't find your form data. Please try again.");
+                } catch (err) {
+                  console.error(`Could not send message: ${err.message}`);
+                }
+                continue;
+              }
+
+              const { name, email, category, description, webUserId } = formData.data;
+
+              try {
+                // Escalate to agent
+                // Send handoff message to customer
+                const handoffMsg = `Perfect! Connecting you to a human agent who can assist with your ${category} issue. They'll have all your details. One moment...`;
+                try {
+                  await sendSunshineMessage(conversationId, handoffMsg);
+                } catch (msgErr) {
+                  console.error(`Could not send handoff message: ${msgErr.message}`);
+                }
+
+                // Now escalate to agent with webUserId
+                await escalateToAgent(conversationId, name, email, webUserId, activeSwitchboardIntegration);
+
+                // Mark this conversation as escalated so bot won't reply
+                escalatedConversations.add(conversationId);
+
+                // Clear form data after escalation
+                conversationFormData.delete(conversationId);
+
+              } catch (escalateErr) {
+                console.error("Failed to escalate to agent:", escalateErr.message);
+                try {
+                  const errorMsg = `Sorry, there was an issue connecting you to an agent. Please try again.`;
+                  await sendSunshineMessage(conversationId, errorMsg);
+                } catch (msgErr) {
+                  console.error(`Could not send error message: ${msgErr.message}`);
+                }
+              }
+              
+              continue;
+            }
+
+            // Handle CANCEL_ESCALATION response
+            if (messageBody === "CANCEL_ESCALATION" || messageBody === "❌ No, Cancel") {
+              conversationFormData.delete(conversationId);
+              
+              try {
+                await sendSunshineMessage(conversationId, "No problem! Is there anything else I can help you with?");
+              } catch (err) {
+                console.error(`Could not send message: ${err.message}`);
+              }
+              
+              continue;
+            }
+
+            let messageEmbedding;
+            try {
+              messageEmbedding = await embedText(messageBody);
+            } catch (err) {
+              console.error("Embedding error:", err.message);
+              messageEmbedding = null;
+            }
+
+            // Step 2: Search knowledge base (2-phase search)
+            let selectedArticles = [];
+
+            if (messageEmbedding) {
+              try {
+                const phase1Results = await queryVectors(
+                  messageEmbedding, 10, true,
+                  { source: "manual_upload" }
+                );
+
+                const phase1Filtered = phase1Results.filter((r) => r.score >= 0.7);
+
+                if (phase1Filtered.length > 0) {
+                  selectedArticles = phase1Filtered.slice(0, 5);
+                } else {
+                  const phase2Results = await queryVectors(
+                    messageEmbedding, 10, true,
+                    { source: "ticket_chat" }
+                  );
+
+                  const phase2Filtered = phase2Results.filter((r) => r.score >= 0.6);
+                  if (phase2Filtered.length > 0) {
+                    selectedArticles = phase2Filtered.slice(0, 5);
+                  }
+                }
+              } catch (err) {
+                console.error("KB search error:", err.message);
+              }
+            }
+
+            // Check if customer wants escalation
+            try {
+              const wantsEscalation = await shouldCreateTicket(messageBody);
+              if (wantsEscalation) {
+                // Check if we already have form data for this conversation
+                const hasFormData = conversationFormData.has(conversationId);
+                
+                if (!hasFormData) {
+                  // First time - send form to collect customer details
+                  await sendDetailCollectionForm(conversationId);
+                  
+                  // Store that we're waiting for form response
+                  conversationFormData.set(conversationId, {
+                    status: "pending_form",
+                    initiatedBy: userName,
+                    timestamp: Date.now()
+                  });
+                  
+                  continue; // Don't escalate yet, wait for form response
+                }
+
+                // If we already have form data, proceed with escalation
+                const formData = conversationFormData.get(conversationId);
+                const { name, email, webUserId } = formData.data;
+
+                // Send escalation message to customer
+                await sendEscalationMessage(conversationId, userName);
+
+                // Transfer to agent with email and webUserId
+                await escalateToAgent(conversationId, name, email, webUserId, activeSwitchboardIntegration);
+
+                // Clear form data after escalation
+                conversationFormData.delete(conversationId);
+
+                continue;
+              }
+            } catch (err) {
+              console.error("Escalation check failed:", err.message);
+            }
+
+            // Skip bot reply if agent is already handling the conversation
+            if (isAgentActive || isEscalated) {
+              continue;
+            }
+
+            // Generate reply from OpenAI
+            let botReply;
+            try {
+              const prompt = buildReplyBotPrompt(messageBody, selectedArticles);
+              botReply = await generateContent(prompt);
+            } catch (err) {
+              console.error("OpenAI generation error:", err.message);
+              botReply = "I'm sorry, I encountered an issue generating a response. Please try again.";
+            }
+
+            // Send reply
+            try {
+              await sendSunshineMessage(conversationId, botReply);
+              
+            } catch (err) {
+              console.error("Failed to send reply:", err.message);
+            }
+
+          } catch (eventErr) {
+            console.error("Error processing event:", eventErr.message);
           }
         }
-      } catch (err) {
-        console.error("⚠️ KB search error:", err.message);
+      } catch (processErr) {
+        console.error("Error in background processing:", processErr.message);
       }
-    }
-
-    // Step 2.5: Check if customer wants to create a ticket
-    let ticketCreated = false;
-    try {
-      const wantsTicket = await shouldCreateTicket(messageBody);
-      if (wantsTicket) {
-        console.log("🎫 Customer requesting ticket creation...");
-        const ticketId = await createZendeskTicket(messageBody, conversationId, userName);
-        ticketCreated = true;
-        
-        // Send escalation message
-        await sendTicketEscalationMessage(conversationId, ticketId);
-        console.log(`✅ Ticket #${ticketId} created and notified to customer`);
-        
-        // Skip bot reply for ticket creation - customer already got escalation message
-        return;
-      }
-    } catch (err) {
-      console.error("⚠️ Ticket creation check failed:", err.message);
-      // Continue with normal flow if ticket creation fails
-    }
-
-    // Step 3: Generate reply using OpenAI
-    let botReply;
-    try {
-      const prompt = buildReplyBotPrompt(messageBody, selectedArticles, brand);
-      botReply = await generateContent(prompt);
-      console.log(`✅ Generated reply: "${botReply.substring(0, 100)}..."`);
-    } catch (err) {
-      console.error("❌ OpenAI generation error:", err.message);
-      botReply = "I'm sorry, I encountered an issue generating a response. Please try again.";
-    }
-
-    // Step 4: Send bot reply back through Sunshine API
-    try {
-      await sendSunshineMessage(conversationId, botReply);
-    } catch (err) {
-      console.error("❌ Failed to send reply:", err.message);
-    }
+    });
 
   } catch (err) {
-    console.error("❌ Error handling Zendesk webhook:", err.message);
-    // Only send error response if headers not already sent
+    console.error("Error in webhook handler:", err.message);
     if (!res.headersSent) {
       res.status(500).json({
         error: "Failed to process message",
@@ -183,7 +404,6 @@ export async function handleSunshineMessage(req, res) {
     }
   }
 }
-
 /**
  * Send bot reply back to Zendesk Sunshine Conversations
  * Uses correct Sunshine API v2 endpoint and payload format
@@ -198,160 +418,140 @@ async function sendSunshineMessage(conversationId, message) {
 
     // Correct payload format for Sunshine Conversations API v2
     const payload = {
-      author: { 
-        type: "business" 
+      author: {
+        type: "business",
       },
-      content: { 
-        type: "text", 
-        text: message 
-      }
+      content: {
+        type: "text",
+        text: message,
+      },
     };
-
-    console.log(`📤 Sending Sunshine message to conversation: ${conversationId}`);
 
     const response = await sunshineClient.post(
       `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages`,
-      payload
+      payload,
     );
 
-    console.log(`✅ Message sent successfully!`);
     return response.data;
-
   } catch (err) {
-    console.error("❌ Failed to send Sunshine message:", err.response?.data || err.message);
+    console.error(
+      "Failed to send Sunshine message:",
+      err.response?.data || err.message,
+    );
     throw err;
   }
 }
 
 /**
- * Get conversation details
+ * Send detail collection form to customer
+ * Collects: name, email, and issue category before creating ticket
+ * Uses Zendesk Sunshine Conversations API with form support
  */
-export async function getConversation(req, res) {
+async function sendDetailCollectionForm(conversationId) {
   try {
-    const { conversationId } = req.params;
-
-    if (!conversationId) {
-      return res.status(400).json({ error: "conversationId is required" });
+    if (!process.env.SUNSHINE_APP_ID || !process.env.ZENDESK_DOMAIN || !process.env.SUNSHINE_KEY_ID || !process.env.SUNSHINE_KEY_SECRET) {
+      throw new Error("Missing required config: SUNSHINE_APP_ID, ZENDESK_DOMAIN, SUNSHINE_KEY_ID, SUNSHINE_KEY_SECRET");
     }
 
-    const sunshineClient = createSunshineClient();
-    const response = await sunshineClient.get(
-      `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}`
+    // Form payload with all fields
+    // ✅ Note: Sunshine API supports: text, email, select - NOT textarea
+    const payload = {
+      author: {
+        type: "business",
+      },
+      content: {
+        type: "form",
+        text: "Please fill out this form to help us assist you better.",
+        fields: [
+          {
+            type: "text",
+            name: "name",
+            label: "Your Name",
+            placeholder: "Enter your full name...",
+            required: true
+          },
+          {
+            type: "email",
+            name: "email",
+            label: "Email Address",
+            placeholder: "Enter your email...",
+            required: true
+          },
+          {
+            type: "select",
+            name: "category",
+            label: "Issue Category",
+            placeholder: "Choose the category of your issue...",
+            required: true,
+            options: [
+              {
+                name: "billing",
+                label: "Billing & Payments"
+              },
+              {
+                name: "technical",
+                label: "Technical Support"
+              },
+              {
+                name: "account",
+                label: "Account & Profile"
+              },
+              {
+                name: "general",
+                label: "General Inquiry"
+              },
+              {
+                name: "other",
+                label: "Other"
+              }
+            ]
+          },
+          {
+            type: "text",
+            name: "description",
+            label: "Describe Your Issue",
+            placeholder: "Please describe the issue in detail...",
+            required: true
+          }
+        ]
+      },
+    };
+
+    // Build endpoint and URL
+    const endpoint = `/sc/v2/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages`;
+    const fullURL = `https://${process.env.ZENDESK_DOMAIN}.zendesk.com${endpoint}`;
+
+    // Use Sunshine API credentials (not Zendesk Support API)
+    const auth = Buffer.from(
+      `${process.env.SUNSHINE_KEY_ID}:${process.env.SUNSHINE_KEY_SECRET}`
+    ).toString('base64');
+
+    // Send form via axios with full URL and Sunshine Auth
+    const response = await axios.post(
+      fullURL,
+      payload,
+      {
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/json'
+        }
+      }
     );
 
-    res.json(response.data);
-
+    return response.data;
   } catch (err) {
-    console.error("❌ Error fetching conversation:", err.message);
-    res.status(500).json({
-      error: "Failed to fetch conversation",
-      details: err.message,
-    });
+    console.error(
+      "Failed to send detail collection form:",
+      err.response?.data || err.message,
+    );
+    throw err;
   }
 }
+
 
 /**
  * Get conversation history (messages) via API
  */
-export async function getConversationHistoryAPI(req, res) {
-  try {
-    const { conversationId } = req.params;
-
-    if (!conversationId) {
-      return res.status(400).json({ error: "conversationId is required" });
-    }
-
-    const sunshineClient = createSunshineClient();
-    const response = await sunshineClient.get(
-      `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages`
-    );
-
-    res.json({
-      conversationId,
-      messageCount: response.data.messages?.length || 0,
-      messages: response.data.messages || [],
-    });
-
-  } catch (err) {
-    console.error("❌ Error fetching conversation history:", err.message);
-    res.status(500).json({
-      error: "Failed to fetch conversation history",
-      details: err.message,
-    });
-  }
-}
-
-/**
- * Health check for Sunshine integration
- */
-export async function getSunshineStatus(req, res) {
-  try {
-    const sunshineClient = createSunshineClient();
-
-    const response = await sunshineClient.get(
-      `/apps/${process.env.SUNSHINE_APP_ID}`
-    );
-
-    res.json({
-      status: "ok",
-      message: "Sunshine Conversations API is connected",
-      appId: process.env.SUNSHINE_APP_ID,
-      timestamp: new Date().toISOString(),
-    });
-
-  } catch (err) {
-    console.error("❌ Sunshine status error:", err.message);
-    res.status(500).json({
-      status: "error",
-      message: "Failed to connect to Sunshine Conversations API",
-      details: err.message,
-    });
-  }
-}
-
-/**
- * Configure webhook - Call this once to set up the incoming webhook
- * POST /sunshine/configure-webhook with:
- * { webhookUrl: "https://your-backend.com/sunshine/webhook" }
- */
-export async function configureWebhook(req, res) {
-  try {
-    const { webhookUrl } = req.body;
-
-    if (!webhookUrl) {
-      return res.status(400).json({ error: "webhookUrl is required" });
-    }
-
-    const sunshineClient = createSunshineClient();
-
-    const payload = {
-      target: webhookUrl,
-      triggers: [
-        "conversation:message",
-      ],
-    };
-
-    console.log(`🔧 Configuring webhook: ${webhookUrl}`);
-
-    const response = await sunshineClient.post(
-      `/apps/${process.env.SUNSHINE_APP_ID}/webhooks`,
-      payload
-    );
-
-    res.json({
-      success: true,
-      webhookId: response.data.webhook?.id,
-      message: "Webhook configured successfully",
-    });
-
-  } catch (err) {
-    console.error("❌ Webhook configuration error:", err.message);
-    res.status(500).json({
-      error: "Failed to configure webhook",
-      details: err.message,
-    });
-  }
-}
 
 /**
  * Detect if customer is asking to create a ticket
@@ -383,69 +583,132 @@ Respond ONLY with "yes" or "no". Nothing else.`;
   }
 }
 
+
 /**
- * Create a Zendesk ticket from chat conversation
- * Ticket is created in a specific group for agent routing
+ * Escalate conversation to agent using Sunshine API switchboard
+ * Uses the active switchboard integration from the conversation
+ * 
+ * @param {string} conversationId - Conversation ID from webhook
+ * @param {string} customerName - Customer name for logging
+ * @param {string} customerEmail - Customer email for ticket requester
+ * @param {string} webUserId - Sunshine WebUser ID (temporary user in conversation)
+ * @param {string} activeSwitchboardIntegration - Active switchboard integration ID or name from the conversation payload
  */
-async function createZendeskTicket(messageBody, conversationId, customerName) {
+async function escalateToAgent(conversationId, customerName, customerEmail, webUserId, activeSwitchboardIntegration) {
   try {
-    if (!process.env.ZENDESK_DOMAIN || !process.env.ZENDESK_EMAIL || !process.env.ZENDESK_API_TOKEN) {
-      throw new Error("Zendesk credentials not configured");
+    if (!process.env.SUNSHINE_APP_ID) {
+      throw new Error("SUNSHINE_APP_ID not configured in .env");
     }
 
-    // Configuration - Customize these values
-    const SUPPORT_GROUP_ID = process.env.ZENDESK_SUPPORT_GROUP_ID || 360003951132; // Default support group
-    const TICKET_SUBJECT = `Chat Support Request - ${conversationId.substring(0, 8)}`;
+    // Step 1: Send confirmation message to customer
+    const confirmationMsg = `Perfect! Connecting you to a human agent. They'll have all your details. One moment...`;
+    await sendSunshineMessage(conversationId, confirmationMsg);
 
-    const ticketData = {
-      ticket: {
-        subject: TICKET_SUBJECT,
-        description: messageBody,
-        requester: {
-          name: customerName,
-          email: process.env.ZENDESK_EMAIL // Use system email, agent will update if needed
-        },
-        group_id: SUPPORT_GROUP_ID,
-        tags: ["sunshine_chat", "auto_created"],
-        custom_fields: {
-          360015632651: conversationId // Store Sunshine conversation ID for reference
+    // Step 2: Get Smooch user ID from conversation participants
+    console.log(`� Fetching participants for conversation ${conversationId}`);
+    let smoochUserId;
+    try {
+      const sunshineClient = createSunshineClient();
+      const participantsRes = await sunshineClient.get(
+        `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/participants`
+      );
+      smoochUserId = participantsRes.data.participants?.[0]?.userId;
+      console.log(`📧 Smooch user ID: ${smoochUserId}`);
+    } catch (partErr) {
+      console.error(`⚠️ Failed to fetch participants:`, partErr.message);
+    }
+
+    // Step 3: Find Zendesk WebUser by Smooch user ID
+    console.log(`🔍 Searching for Zendesk WebUser with Smooch ID: ${smoochUserId}`);
+    let zendeskUserId;
+    if (smoochUserId) {
+      try {
+        const searchResponse = await axios.get(
+          `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2/users/search?query=${smoochUserId}`,
+          {
+            auth: {
+              username: `${process.env.ZENDESK_EMAIL}/token`,
+              password: process.env.ZENDESK_API_TOKEN
+            },
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        if (searchResponse.data.users && searchResponse.data.users.length > 0) {
+          zendeskUserId = searchResponse.data.users[0].id;
+          console.log(`✅ Found Zendesk WebUser: ${zendeskUserId}`);
         }
+      } catch (searchErr) {
+        console.error(`⚠️ Failed to search for Zendesk WebUser:`, searchErr.response?.data || searchErr.message);
       }
+    }
+
+    // Step 4: Update the Zendesk WebUser with real customer details
+    if (zendeskUserId) {
+      console.log(`📝 Updating Zendesk user ${zendeskUserId} with: ${customerName} (${customerEmail})`);
+      try {
+        const updateResponse = await axios.put(
+          `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2/users/${zendeskUserId}.json`,
+          {
+            user: {
+              name: customerName,
+              email: customerEmail
+            }
+          },
+          {
+            auth: {
+              username: `${process.env.ZENDESK_EMAIL}/token`,
+              password: process.env.ZENDESK_API_TOKEN
+            },
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        console.log(`✅ Updated Zendesk WebUser: ${customerName} (${customerEmail})`);
+      } catch (updateErr) {
+        console.error(`⚠️ Failed to update Zendesk WebUser:`, updateErr.response?.data || updateErr.message);
+      }
+    }
+
+    // Step 5: Pass control to agent workspace via switchboard
+    console.log(`🔄 Passing control to agent workspace...`);
+    const sunshineClient = createSunshineClient();
+    const escalationPayload = {
+      switchboardIntegration: "zd-agentWorkspace",
+      metadata: {
+        reason: "user_requested_agent",
+      },
     };
 
-    const basicAuth = Buffer.from(
-      `${process.env.ZENDESK_EMAIL}/token:${process.env.ZENDESK_API_TOKEN}`
-    ).toString("base64");
+    const endpoint = `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/passControl`;
+    const response = await sunshineClient.post(endpoint, escalationPayload);
 
-    const response = await axios.post(
-      `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2/tickets`,
-      ticketData,
-      {
-        headers: {
-          Authorization: `Basic ${basicAuth}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+    console.log(`✅ Escalated conversation ${conversationId} to agent workspace`);
+    console.log(`⏳ Waiting for agent to accept and for Zendesk to create ticket...`);
 
-    const ticketId = response.data.ticket.id;
-    console.log(`✅ Ticket created: #${ticketId}`);
-    return ticketId;
+    return response.data;
 
   } catch (err) {
-    console.error("❌ Failed to create Zendesk ticket:", err.response?.data || err.message);
+    const status = err.response?.status;
+    const body = err.response?.data;
+    console.error(`Escalation error (status=${status}):`, JSON.stringify(body));
+
     throw err;
   }
 }
 
 /**
- * Send ticket escalation message to customer
+ * Send escalation confirmation message to customer
  */
-async function sendTicketEscalationMessage(conversationId, ticketId) {
+async function sendEscalationMessage(conversationId, customerName) {
   try {
-    const message = `I've created ticket #${ticketId} for you. An agent from our support team will get in touch shortly to help you further. You'll receive updates via email and here in the chat.`;
+    const message = `I'm connecting you with one of our support agents. They'll be with you shortly to assist you further. Thank you for your patience! 👋`;
     await sendSunshineMessage(conversationId, message);
   } catch (err) {
-    console.error("⚠️ Failed to send escalation message:", err.message);
+    console.error("Failed to send escalation message:", err.message);
   }
 }

@@ -36,8 +36,6 @@ export async function initializeConversation(req, res) {
 
     conversationStore.set(sessionId, conversation);
 
-    console.log(`💬 New conversation initialized: ${sessionId}`);
-
     // Send welcome message
     const welcomeMessage = {
       role: "bot",
@@ -53,7 +51,7 @@ export async function initializeConversation(req, res) {
       visitorName: conversation.visitorName,
     });
   } catch (err) {
-    console.error("❌ Conversation init error:", err);
+    console.error("Conversation init error:", err);
     res.status(500).json({ error: "Failed to initialize conversation" });
   }
 }
@@ -68,8 +66,6 @@ export async function handleChatMessage(req, res) {
     if (!sessionId || !message) {
       return res.status(400).json({ error: "sessionId and message are required" });
     }
-
-    console.log(`💬 Message received [${sessionId}]: "${message.substring(0, 50)}..."`);
 
     // Get or create conversation
     let conversation = conversationStore.get(sessionId);
@@ -96,8 +92,6 @@ export async function handleChatMessage(req, res) {
 
     conversation.updatedAt = new Date();
 
-    console.log(`✅ Bot reply sent [${sessionId}]`);
-
     // Return bot reply
     res.json({
       sessionId,
@@ -106,7 +100,7 @@ export async function handleChatMessage(req, res) {
       messageCount: conversation.messages.length,
     });
   } catch (err) {
-    console.error("❌ Chat message error:", err);
+    console.error("Chat message error:", err);
     res.status(500).json({ error: "Failed to process message", details: err.message });
   }
 }
@@ -116,15 +110,12 @@ export async function handleChatMessage(req, res) {
  */
 async function generateBotReply(userMessage, conversation) {
   try {
-    console.log(`🤖 Generating reply for: "${userMessage.substring(0, 50)}..."`);
-
     // Step 1: Generate embedding
     const queryEmbedding = await embedText(userMessage);
     const brand = conversation.brand;
     const filter = brand ? { brand: { $eq: brand } } : null;
 
     // Step 2: PHASE 1 - Search manually uploaded KB
-    console.log("📚 Searching KB...");
     const kbFilter = filter ? { ...filter, source: { $eq: "manual_upload" } } : { source: { $eq: "manual_upload" } };
     const kbResults = await queryVectors(queryEmbedding, 10, true, kbFilter);
     const relevantKBMatches = kbResults.matches.filter(m => m.score >= 0.7);
@@ -134,17 +125,14 @@ async function generateBotReply(userMessage, conversation) {
 
     if (relevantKBMatches.length > 0) {
       finalResults = { matches: relevantKBMatches.slice(0, 5) };
-      console.log(`✅ Found ${relevantKBMatches.length} KB articles`);
     } else {
       // Step 3: PHASE 2 - Fall back to ticket conversations
-      console.log("⚠️ Searching ticket conversations...");
       const chatFilter = filter ? { ...filter, source: { $eq: "ticket_chat" } } : { source: { $eq: "ticket_chat" } };
       const chatResults = await queryVectors(queryEmbedding, 10, true, chatFilter);
       const relevantChatMatches = chatResults.matches.filter(m => m.score >= 0.6);
 
       finalResults = { matches: relevantChatMatches.slice(0, 5) };
       searchSource = "ticket_chat";
-      console.log(`✅ Found ${relevantChatMatches.length} chat references`);
     }
 
     // Step 4: Extract context
@@ -178,11 +166,10 @@ Please provide a helpful, friendly, and concise reply. Keep responses under 200 
       topK: 40,
     });
 
-    console.log(`✅ Reply generated (${replyText.length} chars)`);
     return replyText;
 
   } catch (err) {
-    console.error("❌ Reply generation error:", err);
+    console.error("Reply generation error:", err);
     return "I apologize, but I'm experiencing technical difficulties. Please try again in a moment.";
   }
 }
@@ -213,7 +200,7 @@ export async function getConversationHistory(req, res) {
       messageCount: conversation.messages.length,
     });
   } catch (err) {
-    console.error("❌ History error:", err);
+    console.error("History error:", err);
     res.status(500).json({ error: "Failed to get conversation history" });
   }
 }
@@ -233,11 +220,6 @@ export async function endConversation(req, res) {
     if (!conversation) {
       return res.status(404).json({ error: "Conversation not found" });
     }
-
-    console.log(`🏁 Conversation ended: ${sessionId} (${conversation.messages.length} messages)`);
-
-    // In production, save to database here
-    // await saveConversationToDatabase(conversation);
 
     // Remove from memory
     conversationStore.delete(sessionId);

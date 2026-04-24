@@ -77,14 +77,9 @@ export async function listAvailableModels() {
       }
     );
     
-    console.log("📋 Available OpenAI models:");
-    const gptModels = response.data.data.filter(m => m.id.includes("gpt"));
-    gptModels.slice(0, 10).forEach(model => {
-      console.log(`   - ${model.id}`);
-    });
-    console.log(`   ... and ${gptModels.length - 10} more models`);
+    // Models available but not logged to reduce noise
   } catch (error) {
-    console.error("❌ Could not list models:", error.message);
+    console.error("Could not list models:", error.message);
   }
 }
 
