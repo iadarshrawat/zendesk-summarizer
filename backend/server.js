@@ -7,6 +7,7 @@ import { createCustomObjectType } from "./src/config/zendesk.js";
 import navbarRoutes from "./src/routes/navbar.route.js";
 import sidebarRoutes from "./src/routes/sidebar.route.js";
 import editorRoutes from "./src/routes/editor.route.js";
+import sunshineRoutes from "./src/routes/sunshine.route.js";
 
 dotenv.config();
 
@@ -28,6 +29,9 @@ app.use(sidebarRoutes);
 
 // Editor routes (Reply functionality)
 app.use(editorRoutes);
+
+// Sunshine routes (Chat widget functionality)
+app.use(sunshineRoutes);
 
 /* ================= UTILITY ENDPOINTS ================= */
 
@@ -100,14 +104,11 @@ app.post("/recreate-custom-object", async (_, res) => {
     const { createZendeskClient } = await import("./src/config/zendesk.js");
     const zendeskClient = createZendeskClient();
     
-    console.log(`🗑️ Attempting to delete old custom object...`);
-    
     try {
       await zendeskClient.delete('/custom_objects/kb_import_log_v3');
-      console.log(`✅ Old custom object deleted`);
       await new Promise(resolve => setTimeout(resolve, 2000));
     } catch (deleteErr) {
-      console.log(`⚠️ Could not delete old object:`, deleteErr.message);
+      // Custom object may not exist, continue
     }
     
     const result = await createCustomObjectType();
@@ -135,46 +136,35 @@ app.post("/recreate-custom-object", async (_, res) => {
 
 async function startServer() {
   try {
-    console.log("🚀 Starting server...");
-    console.log("🔧 Initializing Pinecone...");
-    
     // Create uploads directory if it doesn't exist
     if (!fs.existsSync('uploads')) {
       fs.mkdirSync('uploads');
     }
     
-    // Initialize Pinecone index
-    await initializeIndex();
-    
-    // Setup Zendesk custom object (if credentials available)
-    if (process.env.ZENDESK_EMAIL && process.env.ZENDESK_API_TOKEN && process.env.ZENDESK_DOMAIN) {
-      console.log("🔧 Setting up Zendesk custom object...");
-      await createCustomObjectType();
-    }
-    
+    // Start listening immediately
     app.listen(PORT, () => {
-      console.log(`\n✅ Server running successfully!`);
-      console.log(`🌐 URL: http://localhost:${PORT}`);
-      console.log(`\n📍 Available endpoints:`);
-      console.log(`\n🔹 NAVBAR (Import):`);
-      console.log(`  POST   /auto-import-tickets  - Auto-import tickets from Zendesk`);
-      console.log(`  POST   /import-file          - Import file to knowledge base`);
-      console.log(`  POST   /ingest-kb            - Ingest knowledge base articles`);
-      console.log(`  DELETE /reset-kb             - Reset knowledge base`);
-      console.log(`  GET    /index-stats          - Get index statistics`);
-      console.log(`\n🔹 SIDEBAR (Summary):`);
-      console.log(`  POST   /summarize            - Summarize a ticket`);
-      console.log(`  POST   /translate            - Translate text`);
-      console.log(`\n🔹 EDITOR (Reply):`);
-      console.log(`  POST   /compose-reply        - Generate RAG-based reply`);
-      console.log(`  POST   /debug-search         - Debug article search`);
-      console.log(`\n🔹 UTILITY:`);
-      console.log(`  GET    /health               - Health check`);
-      console.log(`  DELETE /force-delete-index   - Force delete Pinecone index`);
-      console.log(`\n💡 Tip: Test with: curl http://localhost:${PORT}/health\n`);
+      console.log(`Server running at http://localhost:${PORT}`);
+      
+      // Initialize Pinecone in background (with timeout)
+      Promise.race([
+        initializeIndex(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000))
+      ]).catch(err => {
+        console.error("Pinecone initialization failed:", err.message);
+      });
+      
+      // Setup Zendesk custom object in background (with timeout)
+      if (process.env.ZENDESK_EMAIL && process.env.ZENDESK_API_TOKEN && process.env.ZENDESK_DOMAIN) {
+        Promise.race([
+          createCustomObjectType(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000))
+        ]).catch(err => {
+          console.error("Zendesk setup error:", err.message);
+        });
+      }
     });
   } catch (err) {
-    console.error("❌ Failed to start server:", err);
+    console.error("Failed to start server:", err);
     process.exit(1);
   }
 }

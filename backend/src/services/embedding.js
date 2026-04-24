@@ -29,12 +29,10 @@ export async function embedText(text, useCache = true) {
   const MAX_CHARS = 7000;
   let processText = text;
   if (text.length > MAX_CHARS) {
-    console.log(`⚠️  Truncating long chunk from ${text.length} to ${MAX_CHARS} chars`);
     processText = text.substring(0, MAX_CHARS) + '... [truncated]';
   }
 
   if (useCache && embeddingCache.has(processText)) {
-    console.log(`💾 Cache hit for text (${processText.substring(0, 30)}...)`);
     return embeddingCache.get(processText);
   }
 
@@ -83,7 +81,7 @@ export async function embedText(text, useCache = true) {
       
       // Log detailed error info on first attempt
       if (attempt === 0) {
-        console.error(`❌ Embedding API error:`, {
+        console.error(`Embedding API error:`, {
           status: error.response?.status,
           statusText: error.response?.statusText,
           data: error.response?.data,
@@ -95,23 +93,19 @@ export async function embedText(text, useCache = true) {
       if (error.response?.status === 429) {
         const retryAfter = error.response?.headers?.['retry-after'] || RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
         const retryDelay = parseFloat(retryAfter) * 1000 || RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Rate limited (attempt ${attempt + 1}/${RATE_LIMIT.maxRetries}). Waiting ${(retryDelay / 1000).toFixed(1)}s...`);
         await sleep(retryDelay);
         continue;
       }
       
       // Handle 404 errors
       if (error.response?.status === 404) {
-        console.error(`❌ 404 Error - Model not found`);
-        console.error(`   Endpoint: ${endpoint}`);
-        console.error(`   Response:`, error.response?.data);
+        console.error(`404 Error - Model not found`);
         throw new Error(`Model not available. The API returned: ${error.response?.data?.error?.message || 'Model not found'}`);
       }
       
       // Handle server errors (500, 503) with exponential backoff
       if (error.response?.status >= 500) {
         const retryDelay = RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Server error ${error.response.status} (attempt ${attempt + 1}/${RATE_LIMIT.maxRetries}). Waiting ${retryDelay}ms...`);
         await sleep(retryDelay);
         continue;
       }
@@ -119,7 +113,6 @@ export async function embedText(text, useCache = true) {
       // Network errors - retry with exponential backoff
       if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
         const retryDelay = RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Network error (attempt ${attempt + 1}/${RATE_LIMIT.maxRetries}). Waiting ${retryDelay}ms...`);
         await sleep(retryDelay);
         continue;
       }
@@ -127,13 +120,12 @@ export async function embedText(text, useCache = true) {
       // Handle timeout errors (also retry)
       if (error.message.includes('timeout')) {
         const retryDelay = RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
-        console.warn(`⚠️ Request timeout (attempt ${attempt + 1}/${RATE_LIMIT.maxRetries}). Waiting ${retryDelay}ms...`);
         await sleep(retryDelay);
         continue;
       }
       
       // For other errors, fail immediately
-      console.error(`❌ Unrecoverable error: ${error.message}`);
+      console.error(`Unrecoverable error: ${error.message}`);
       throw error;
     }
   }
@@ -163,9 +155,6 @@ export async function embedTextBatch(texts, options = {}) {
   const embeddings = [];
   const totalTexts = texts.length;
   
-  console.log(`🔄 Starting batch embedding for ${totalTexts} texts...`);
-  console.log(`📊 Settings: ${batchSize} per batch, ${batchDelay}ms delay between batches`);
-  
   for (let i = 0; i < totalTexts; i++) {
     const text = texts[i];
     
@@ -178,28 +167,16 @@ export async function embedTextBatch(texts, options = {}) {
         onProgress(i + 1, totalTexts);
       }
       
-      // Log progress every 50 items
-      if ((i + 1) % 50 === 0) {
-        console.log(`✓ Processed ${i + 1}/${totalTexts} embeddings (${Math.round((i + 1) / totalTexts * 100)}%)`);
-      }
-      
       // Longer pause between batches to avoid sustained rate limiting
       if ((i + 1) % batchSize === 0 && i + 1 < totalTexts) {
-        console.log(`⏸️  Batch complete (${i + 1}/${totalTexts}). Pausing ${batchDelay}ms...`);
         await sleep(batchDelay);
       }
       
     } catch (error) {
-      console.error(`❌ Failed to embed text ${i + 1}/${totalTexts}:`, error.message);
-      console.error(`   Text preview: "${text.substring(0, 100)}..."`);
-      
-      // Decide whether to fail fast or skip and continue
-      throw error; // Fail fast - you can change this to continue on error
+      console.error(`Failed to embed text ${i + 1}/${totalTexts}:`, error.message);
+      throw error; // Fail fast
     }
   }
-  
-  console.log(`✅ Batch embedding complete: ${embeddings.length}/${totalTexts} successful`);
-  console.log(`💾 Cache size: ${embeddingCache.size} entries`);
   
   return embeddings;
 }
@@ -210,7 +187,6 @@ export async function embedTextBatch(texts, options = {}) {
 export function clearEmbeddingCache() {
   const size = embeddingCache.size;
   embeddingCache.clear();
-  console.log(`🗑️  Cleared ${size} cached embeddings`);
 }
 
 /**
@@ -231,8 +207,6 @@ export function getCacheStats() {
  * @returns {Promise<number[][]>} Array of embedding vectors
  */
 export async function embedTextBatchParallel(texts, concurrency = 3) {
-  console.log(`🚀 Starting parallel batch embedding (concurrency: ${concurrency})...`);
-  
   const results = new Array(texts.length);
   const chunks = [];
   
@@ -253,13 +227,9 @@ export async function embedTextBatchParallel(texts, concurrency = 3) {
         .then(embedding => {
           results[globalIndex] = embedding;
           processed++;
-          
-          if (processed % 50 === 0) {
-            console.log(`✓ Processed ${processed}/${texts.length} embeddings (${Math.round(processed / texts.length * 100)}%)`);
-          }
         })
         .catch(error => {
-          console.error(`❌ Failed to embed text ${globalIndex + 1}:`, error.message);
+          console.error(`Failed to embed text ${globalIndex + 1}:`, error.message);
           throw error;
         });
     });
@@ -272,6 +242,5 @@ export async function embedTextBatchParallel(texts, concurrency = 3) {
     }
   }
   
-  console.log(`✅ Parallel embedding complete: ${results.length} embeddings`);
   return results.filter(r => r !== undefined);
 }

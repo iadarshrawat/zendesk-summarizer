@@ -26,9 +26,6 @@ export async function initializeIndex() {
     const indexExists = indexList.indexes?.some(idx => idx.name === INDEX_NAME);
 
     if (!indexExists) {
-      console.log(`📦 Creating new index: ${INDEX_NAME}`);
-      console.log(`⏳ This may take 30-60 seconds...`);
-      
       await pc.createIndex({
         name: INDEX_NAME,
         dimension: DIMENSION,
@@ -41,7 +38,6 @@ export async function initializeIndex() {
         },
       });
       
-      console.log("⏳ Waiting for index to be ready...");
       let ready = false;
       let attempts = 0;
       
@@ -63,16 +59,10 @@ export async function initializeIndex() {
       if (!ready) {
         throw new Error("Index creation timeout. Please try again.");
       }
-      
-      console.log(`✅ Index created with dimension: ${DIMENSION}`);
     } else {
-      console.log(`✅ Index already exists: ${INDEX_NAME}`);
-      
       try {
         const indexDesc = await pc.describeIndex(INDEX_NAME);
         const indexDimension = indexDesc.dimension;
-        
-        console.log(`🔍 Index dimension: ${indexDimension}`);
         
         if (indexDimension !== DIMENSION) {
           console.error(`\n⚠️ Dimension mismatch detected!`);

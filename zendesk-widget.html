@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Zendesk Support</title>
+
+  <!-- Zendesk Settings -->
+  <script>
+    window.zESettings = {
+      webWidget: {
+        launcher: {
+          label: "Chat with us"
+        }
+      }
+    };
+  </script>
+</head>
+
+<body>
+  <h1>Support Page</h1>
+  <p>Click on the chat widget to talk with us.</p>
+
+  <!-- ✅ 1. Zendesk Script (MUST come first) -->
+  <script id="ze-snippet"
+    src="https://static.zdassets.com/ekr/snippet.js?key=4200724f-94bb-4a43-b68b-4f8cc65407bc">
+  </script>
+
+  <!-- ✅ 2. Your Code (AFTER widget loads) -->
+  <script>
+    window.addEventListener("load", function () {
+
+      if (window.zE) {
+      // Pehle logout karo — conversation clear ho jaayegi
+      zE('messenger', 'logoutUser');
+    }
+
+      if (typeof zE !== "undefined") {
+
+        console.log("Zendesk Loaded ✅");
+
+        // Widget open event
+        zE('webWidget:on', 'open', function () {
+          console.log("Widget Opened 🚀");
+        });
+
+        // Widget close event
+        zE('webWidget:on', 'close', function () {
+          console.log("Widget Closed ❌");
+        });
+
+        // User interaction event (important)
+        zE('webWidget:on', 'userEvent', function (data) {
+          console.log("User Event 👉", data);
+        });
+
+      } else {
+        console.log("Zendesk NOT loaded ❌");
+      }
+
+    });
+  </script>
+</body>
+</html>

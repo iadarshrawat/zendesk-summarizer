@@ -118,6 +118,39 @@ WRITE THE SOLUTION-FOCUSED REPLY BELOW
 }
 
 /**
+ * Build prompt for Sunshine chat bot replies
+ */
+export function buildReplyBotPrompt(messageBody, selectedArticles, brand) {
+  let context = '';
+  
+  if (selectedArticles && selectedArticles.length > 0) {
+    context = `
+Relevant knowledge base articles:
+${selectedArticles.map((article, i) => `
+${i + 1}. ${article.title}
+${article.body}
+`).join('\n---\n')}
+`;
+  }
+
+  return `You are a helpful customer support assistant for ${brand}.
+
+Customer Message: "${messageBody}"
+
+${context}
+
+REPLY RULES:
+- Keep your response SHORT and CONCISE (max 2-3 sentences)
+- Be friendly and professional
+- If relevant articles are provided, reference them
+- Only provide information you're confident about
+- If you cannot help, suggest escalation to a human agent
+- Do NOT include generic pleasantries unless necessary
+
+Provide your reply:`;
+}
+
+/**
  * Build translation prompt
  */
 export function buildTranslationPrompt(text, targetLanguage) {
