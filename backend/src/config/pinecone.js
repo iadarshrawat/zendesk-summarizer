@@ -3,16 +3,63 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-if (!process.env.PINECONE_API_KEY) {
-  console.error("❌ PINECONE_API_KEY missing");
+// ============================================================================
+// CONFIGURATION & VALIDATION
+// ============================================================================
+
+/**
+ * Pinecone Vector Database Configuration
+ * 
+ * Pinecone stores semantic embeddings for knowledge base articles and tickets.
+ * This enables similarity search for intelligent customer support responses.
+ * 
+ * Required environment variables:
+ * - PINECONE_API_KEY: API key from Pinecone
+ * 
+ * Optional environment variables:
+ * - PINECONE_INDEX_NAME: Index name (default: "zendesk-kb")
+ * - PINECONE_DIMENSION: Vector dimension (default: 1536 for OpenAI small model)
+ * - PINECONE_METRIC: Distance metric (default: "cosine")
+ */
+export const PINECONE_CONFIG = {
+  apiKey: process.env.PINECONE_API_KEY || '',
+  indexName: process.env.PINECONE_INDEX_NAME || "zendesk-kb",
+  dimension: parseInt(process.env.PINECONE_DIMENSION) || 2048, // OpenAI text-embedding-3-large dimension
+  metric: process.env.PINECONE_METRIC || "cosine",
+  region: "us-east-1",
+  cloud: "aws",
+};
+
+/**
+ * Search configuration - thresholds for different content types
+ */
+export const SEARCH_CONFIG = {
+  // Manual knowledge base articles (high quality)
+  manualUpload: {
+    source: "manual_upload",
+    scoreThreshold: 0.7,
+    topK: 5,
+  },
+  // Ticket-based knowledge (lower quality but contextual)
+  ticketChat: {
+    source: "ticket_chat",
+    scoreThreshold: 0.6,
+    topK: 5,
+  },
+};
+
+// Validate configuration
+if (!PINECONE_CONFIG.apiKey) {
+  console.error("❌ PINECONE_API_KEY missing from environment");
   process.exit(1);
 }
 
-const INDEX_NAME = "zendesk-kb";
-const DIMENSION = 1536; // OpenAI text-embedding-3-small dimension
+// Export constants for convenience
+const INDEX_NAME = PINECONE_CONFIG.indexName;
+const DIMENSION = PINECONE_CONFIG.dimension;
 
 const pc = new Pinecone({
-  apiKey: process.env.PINECONE_API_KEY,
+  apiKey: PINECONE_CONFIG.apiKey,
 });
 
 let indexCache = null;

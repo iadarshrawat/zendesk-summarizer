@@ -3,25 +3,63 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-if (!process.env.ZENDESK_EMAIL || !process.env.ZENDESK_API_TOKEN || !process.env.ZENDESK_DOMAIN) {
-  console.warn("⚠️ Zendesk credentials missing - auto-import feature will not work");
-  console.warn("💡 Add ZENDESK_EMAIL, ZENDESK_API_TOKEN, and ZENDESK_DOMAIN to .env file");
+// ============================================================================
+// CONFIGURATION & VALIDATION
+// ============================================================================
+
+/**
+ * Zendesk API Configuration
+ * Required environment variables:
+ * - ZENDESK_EMAIL: Email for Zendesk API access
+ * - ZENDESK_API_TOKEN: API token from Zendesk
+ * - ZENDESK_DOMAIN: Your Zendesk subdomain (e.g., 'company' from company.zendesk.com)
+ * - ZENDESK_BRAND_ID: (Optional) Specific brand ID for ticket operations
+ */
+export const ZENDESK_CONFIG = {
+  email: process.env.ZENDESK_EMAIL || '',
+  apiToken: process.env.ZENDESK_API_TOKEN || '',
+  domain: process.env.ZENDESK_DOMAIN || '',
+  brandId: process.env.ZENDESK_BRAND_ID || null,
+  baseUrl: process.env.ZENDESK_DOMAIN 
+    ? `https://${process.env.ZENDESK_DOMAIN}.zendesk.com` 
+    : null,
+};
+
+/**
+ * Validate Zendesk configuration on startup
+ */
+function validateZendeskConfig() {
+  const required = ['ZENDESK_EMAIL', 'ZENDESK_API_TOKEN', 'ZENDESK_DOMAIN'];
+  const missing = required.filter(key => !process.env[key]);
+  
+  if (missing.length > 0) {
+    console.warn("⚠️ Zendesk credentials missing - auto-import feature will not work");
+    console.warn(`💡 Missing: ${missing.join(', ')}`);
+    console.warn("💡 Add to .env file: ZENDESK_EMAIL, ZENDESK_API_TOKEN, ZENDESK_DOMAIN");
+    return false;
+  }
+  return true;
 }
+
+// Validate on import
+const isConfigured = validateZendeskConfig();
 
 /**
  * Create Zendesk API client
+ * Uses Basic Auth with email/token
+ * @throws {Error} If Zendesk credentials not configured
  */
 export function createZendeskClient() {
-  if (!process.env.ZENDESK_EMAIL || !process.env.ZENDESK_API_TOKEN || !process.env.ZENDESK_DOMAIN) {
-    throw new Error("Zendesk credentials not configured");
+  if (!isConfigured) {
+    throw new Error("Zendesk credentials not configured. Set ZENDESK_EMAIL, ZENDESK_API_TOKEN, and ZENDESK_DOMAIN in .env");
   }
 
   const auth = Buffer.from(
-    `${process.env.ZENDESK_EMAIL}/token:${process.env.ZENDESK_API_TOKEN}`
+    `${ZENDESK_CONFIG.email}/token:${ZENDESK_CONFIG.apiToken}`
   ).toString('base64');
 
   return axios.create({
-    baseURL: `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2`,
+    baseURL: `${ZENDESK_CONFIG.baseUrl}/api/v2`,
     headers: {
       'Authorization': `Basic ${auth}`,
       'Content-Type': 'application/json'
