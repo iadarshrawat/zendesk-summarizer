@@ -8,14 +8,14 @@ const RATE_LIMIT = {
   requestsPerMinute: 3500,
   delayBetweenRequests: 20,
   maxRetries: 5,
-  baseRetryDelay: 1000
+  baseRetryDelay: 1000,
 };
 
 // Simple in-memory cache to avoid re-embedding identical text
 const embeddingCache = new Map();
 
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function embedText(text, useCache = true) {
@@ -29,7 +29,7 @@ export async function embedText(text, useCache = true) {
   const MAX_CHARS = 7000;
   let processText = text;
   if (text.length > MAX_CHARS) {
-    processText = text.substring(0, MAX_CHARS) + '... [truncated]';
+    processText = text.substring(0, MAX_CHARS) + "... [truncated]";
   }
 
   if (useCache && embeddingCache.has(processText)) {
@@ -37,93 +37,107 @@ export async function embedText(text, useCache = true) {
   }
 
   const endpoint = `https://api.openai.com/v1/embeddings`;
-  
+
   let lastError = null;
-  
+
   for (let attempt = 0; attempt < RATE_LIMIT.maxRetries; attempt++) {
     try {
       // Add delay between requests to respect rate limits
       if (attempt > 0 || embeddingCache.size > 0) {
         await sleep(RATE_LIMIT.delayBetweenRequests);
       }
-      
+
       const response = await axios.post(
         endpoint,
         {
           model: "text-embedding-3-large",
           input: processText,
-          encoding_format: "float"
+          dimensions: 2048,
+          encoding_format: "float",
         },
         {
           headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json"
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
           },
-          timeout: 60000
-        }
+          timeout: 60000,
+        },
       );
 
-      if (response.data && response.data.data && response.data.data[0]?.embedding) {
+      if (
+        response.data &&
+        response.data.data &&
+        response.data.data[0]?.embedding
+      ) {
         const embedding = response.data.data[0].embedding;
-        
+
         // Cache the result (use processText as key)
         if (useCache) {
           embeddingCache.set(processText, embedding);
         }
-        
+
         return embedding;
       }
 
       throw new Error("No embedding values in response");
-      
     } catch (error) {
       lastError = error;
-      
+
       // Log detailed error info on first attempt
       if (attempt === 0) {
         console.error(`Embedding API error:`, {
           status: error.response?.status,
           statusText: error.response?.statusText,
           data: error.response?.data,
-          message: error.message
+          message: error.message,
         });
       }
-      
+
       // Handle rate limiting (429) - parse OpenAI's retry-after header
       if (error.response?.status === 429) {
-        const retryAfter = error.response?.headers?.['retry-after'] || RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
-        const retryDelay = parseFloat(retryAfter) * 1000 || RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
+        const retryAfter =
+          error.response?.headers?.["retry-after"] ||
+          RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
+        const retryDelay =
+          parseFloat(retryAfter) * 1000 ||
+          RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
         await sleep(retryDelay);
         continue;
       }
-      
+
       // Handle 404 errors
       if (error.response?.status === 404) {
         console.error(`404 Error - Model not found`);
-        throw new Error(`Model not available. The API returned: ${error.response?.data?.error?.message || 'Model not found'}`);
+        throw new Error(
+          `Model not available. The API returned: ${error.response?.data?.error?.message || "Model not found"}`,
+        );
       }
-      
+
       // Handle server errors (500, 503) with exponential backoff
       if (error.response?.status >= 500) {
         const retryDelay = RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
         await sleep(retryDelay);
         continue;
       }
-      
+
       // Network errors - retry with exponential backoff
-      if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+      if (
+        error.code === "ECONNRESET" ||
+        error.code === "ETIMEDOUT" ||
+        error.code === "ENOTFOUND"
+      ) {
         const retryDelay = RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
         await sleep(retryDelay);
         continue;
       }
-      
+
       // Handle timeout errors (also retry)
-      if (error.message.includes('timeout')) {
+      if (error.message.includes("timeout")) {
         const retryDelay = RATE_LIMIT.baseRetryDelay * Math.pow(2, attempt);
         await sleep(retryDelay);
         continue;
       }
-      
+
       // For other errors, fail immediately
       console.error(`Unrecoverable error: ${error.message}`);
       throw error;
@@ -131,7 +145,7 @@ export async function embedText(text, useCache = true) {
   }
 
   throw new Error(
-    `Failed to generate embedding after ${RATE_LIMIT.maxRetries} attempts: ${lastError?.message || 'Unknown error'}`
+    `Failed to generate embedding after ${RATE_LIMIT.maxRetries} attempts: ${lastError?.message || "Unknown error"}`,
   );
 }
 
@@ -143,41 +157,39 @@ export async function embedText(text, useCache = true) {
  * @param {number} options.batchSize - Number of texts to process before a longer pause (default: 50 for OpenAI)
  * @param {number} options.batchDelay - Delay in ms between batches (default: 5000ms = 5 seconds for OpenAI)
  * @param {function} options.onProgress - Callback for progress updates (progress, total)
- * @returns {Promise<number[][]>} Array of embedding vectors (each 1536 dimensions)
+ * @returns {Promise<number[][]>} Array of embedding vectors (each 2048 dimensions)
  */
 export async function embedTextBatch(texts, options = {}) {
-  const {
-    batchSize = 50,
-    batchDelay = 5000,
-    onProgress = null
-  } = options;
-  
+  const { batchSize = 50, batchDelay = 5000, onProgress = null } = options;
+
   const embeddings = [];
   const totalTexts = texts.length;
-  
+
   for (let i = 0; i < totalTexts; i++) {
     const text = texts[i];
-    
+
     try {
       const embedding = await embedText(text, true);
       embeddings.push(embedding);
-      
+
       // Progress callback
       if (onProgress) {
         onProgress(i + 1, totalTexts);
       }
-      
+
       // Longer pause between batches to avoid sustained rate limiting
       if ((i + 1) % batchSize === 0 && i + 1 < totalTexts) {
         await sleep(batchDelay);
       }
-      
     } catch (error) {
-      console.error(`Failed to embed text ${i + 1}/${totalTexts}:`, error.message);
+      console.error(
+        `Failed to embed text ${i + 1}/${totalTexts}:`,
+        error.message,
+      );
       throw error; // Fail fast
     }
   }
-  
+
   return embeddings;
 }
 
@@ -195,7 +207,7 @@ export function clearEmbeddingCache() {
 export function getCacheStats() {
   return {
     size: embeddingCache.size,
-    estimatedMemoryMB: (embeddingCache.size * 768 * 8) / (1024 * 1024) // rough estimate
+    estimatedMemoryMB: (embeddingCache.size * 768 * 8) / (1024 * 1024), // rough estimate
   };
 }
 
@@ -209,38 +221,41 @@ export function getCacheStats() {
 export async function embedTextBatchParallel(texts, concurrency = 3) {
   const results = new Array(texts.length);
   const chunks = [];
-  
+
   // Split texts into chunks for parallel processing
   for (let i = 0; i < texts.length; i += concurrency) {
     chunks.push(texts.slice(i, i + concurrency));
   }
-  
+
   let processed = 0;
-  
+
   for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
     const chunk = chunks[chunkIndex];
-    
+
     // Process chunk in parallel
     const promises = chunk.map((text, idx) => {
       const globalIndex = chunkIndex * concurrency + idx;
       return embedText(text, true)
-        .then(embedding => {
+        .then((embedding) => {
           results[globalIndex] = embedding;
           processed++;
         })
-        .catch(error => {
-          console.error(`Failed to embed text ${globalIndex + 1}:`, error.message);
+        .catch((error) => {
+          console.error(
+            `Failed to embed text ${globalIndex + 1}:`,
+            error.message,
+          );
           throw error;
         });
     });
-    
+
     await Promise.all(promises);
-    
+
     // Small delay between chunks
     if (chunkIndex < chunks.length - 1) {
       await sleep(200);
     }
   }
-  
-  return results.filter(r => r !== undefined);
+
+  return results.filter((r) => r !== undefined);
 }

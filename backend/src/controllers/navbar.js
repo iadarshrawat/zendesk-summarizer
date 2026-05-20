@@ -10,6 +10,10 @@ import { embedTextBatch, clearEmbeddingCache, getCacheStats } from "../services/
 import { chunkTicketData, extractTicketsFromJSON } from "../services/chunking.js";
 import { extractTextFromFile, cleanupFile } from "../services/fileProcessor.js";
 
+// ============================================================================
+// AUTO IMPORT TICKETS
+// ============================================================================
+
 export async function autoImportTickets(req, res) {
   const startTime = Date.now();
   
@@ -34,6 +38,7 @@ export async function autoImportTickets(req, res) {
     console.log(`📡 Step 2: Fetching tickets...`);
     const tickets = await fetchTicketsByDateRange(startDate, endDate);
     console.log(`✅ Fetched ${tickets.length} tickets\n`);
+
     const customRecord = await createZendeskImportRecord({
       startDate: startDate,
       endDate: endDate,
@@ -49,10 +54,7 @@ export async function autoImportTickets(req, res) {
         totalChunks: 0,
         processingTime: processingTime,
         zendeskRecordId: customRecord?.id || null,
-        dateRange: {
-          start: startDate,
-          end: endDate
-        }
+        dateRange: { start: startDate, end: endDate }
       });
     }
     
@@ -73,7 +75,6 @@ export async function autoImportTickets(req, res) {
       for (const ticket of batch) {
         try {
           if (skipEnrichment) {
-            // Quick mode: minimal data
             enrichedTickets.push({
               ticket_id: ticket.id,
               subject: ticket.subject || '',
@@ -88,7 +89,6 @@ export async function autoImportTickets(req, res) {
               custom_fields: {}
             });
           } else {
-            // Full enrichment with error recovery
             try {
               const enriched = await enrichTicketWithComments(ticket, fieldsMap);
               if (!enriched || typeof enriched !== 'object') {
@@ -110,23 +110,15 @@ export async function autoImportTickets(req, res) {
                 resolution: null,
                 custom_fields: {}
               });
-              failedEnrichments.push({
-                ticketId: ticket.id,
-                error: enrichError.message
-              });
+              failedEnrichments.push({ ticketId: ticket.id, error: enrichError.message });
             }
           }
         } catch (error) {
           console.error(`      ❌ Failed to process ticket ${ticket.id}:`, error.message);
-          failedEnrichments.push({
-            ticketId: ticket.id,
-            error: error.message
-          });
-          // Continue with next ticket
+          failedEnrichments.push({ ticketId: ticket.id, error: error.message });
         }
       }
       
-      // Small delay between enrichment batches
       if (i + ENRICHMENT_BATCH_SIZE < tickets.length) {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
@@ -148,10 +140,7 @@ export async function autoImportTickets(req, res) {
         
         if (!Array.isArray(chunks) || chunks.length === 0) {
           console.warn(`      ⚠️  No chunks created for ticket ${ticket.ticket_id}`);
-          failedChunking.push({
-            ticketId: ticket.ticket_id,
-            reason: 'No chunks generated'
-          });
+          failedChunking.push({ ticketId: ticket.ticket_id, reason: 'No chunks generated' });
           continue;
         }
         
@@ -162,10 +151,7 @@ export async function autoImportTickets(req, res) {
         })));
       } catch (error) {
         console.error(`      ❌ Chunking failed for ticket ${ticket.ticket_id}:`, error.message);
-        failedChunking.push({
-          ticketId: ticket.ticket_id,
-          error: error.message
-        });
+        failedChunking.push({ ticketId: ticket.ticket_id, error: error.message });
       }
     }
     
@@ -184,16 +170,15 @@ export async function autoImportTickets(req, res) {
     
     console.log(`✅ Created ${allChunks.length} chunks (avg ${(allChunks.length / enrichedTickets.length).toFixed(1)} per ticket)\n`);
     
-    // Step 5: Generate embeddings with smart batching and rate limiting
+    // Step 5: Generate embeddings
     console.log(`🧮 Step 5: Generating embeddings for ${allChunks.length} chunks...`);
     console.log(`⚙️  Using smart rate limiting to avoid API limits...\n`);
     
     const texts = allChunks.map(({ chunk }) => chunk.text);
     
-    // Configure OpenAI embedding settings - much faster than Google
     const embeddingConfig = mode === 'quick' 
-      ? { batchSize: 100, batchDelay: 1000 }  // Quick mode: 100 per batch, 1 sec delay
-      : { batchSize: 50, batchDelay: 5000 };  // Standard mode: 50 per batch, 5 sec delay
+      ? { batchSize: 100, batchDelay: 1000 }
+      : { batchSize: 50, batchDelay: 5000 };
     
     let embeddings;
     try {
@@ -216,8 +201,6 @@ export async function autoImportTickets(req, res) {
       
     } catch (error) {
       console.error(`❌ Embedding generation failed:`, error.message);
-      
-      // Check if it's a rate limit or API key issue
       if (error.message.includes('429') || error.message.includes('rate')) {
         throw new Error(`Rate limited by OpenAI API: ${error.message}`);
       } else if (error.message.includes('401') || error.message.includes('invalid')) {
@@ -247,6 +230,7 @@ export async function autoImportTickets(req, res) {
           metadata: {
             ...chunk.metadata,
             content: chunk.text,
+            text: chunk.text,             // ← buildBotPrompt reads this
             source: 'ticket_chat',
             importDate: new Date().toISOString(),
             created_at: chunk.metadata?.created_at,
@@ -255,11 +239,9 @@ export async function autoImportTickets(req, res) {
         };
       });
       
-      if (vectors.length === 0) {
-        throw new Error('No vectors prepared');
-      }
-      
+      if (vectors.length === 0) throw new Error('No vectors prepared');
       console.log(`✅ Prepared ${vectors.length} vectors\n`);
+
     } catch (error) {
       console.error(`❌ Vector preparation failed:`, error.message);
       throw new Error(`Vector preparation failed: ${error.message}`);
@@ -296,10 +278,7 @@ export async function autoImportTickets(req, res) {
       processingTime: processingTime,
       cacheHits: cacheStats.size,
       zendeskRecordId: customRecord?.id || null,
-      dateRange: {
-        start: startDate,
-        end: endDate
-      }
+      dateRange: { start: startDate, end: endDate }
     });
     
   } catch (err) {
@@ -310,7 +289,6 @@ export async function autoImportTickets(req, res) {
     console.error("Stack:", err.stack);
     console.error("=".repeat(60) + "\n");
     
-    // Create error record
     try {
       const errorRecord = await createZendeskErrorImportRecord({
         startDate: req.body?.startDate || 'N/A',
@@ -319,7 +297,6 @@ export async function autoImportTickets(req, res) {
         errorDetails: err.stack || err.toString(),
         source: 'auto_import'
       });
-      
       return res.status(500).json({ 
         error: "Auto-import failed", 
         details: err.message,
@@ -339,38 +316,16 @@ export async function autoImportTickets(req, res) {
   }
 }
 
-/**
- * Suggest fix based on error message
- */
-function getSuggestionForError(message) {
-  if (message.includes('rate')) {
-    return 'Rate limited - wait a few minutes and try again';
-  } else if (message.includes('401') || message.includes('authentication')) {
-    return 'Check your API credentials (OPENAI_API_KEY, ZENDESK_API_TOKEN)';
-  } else if (message.includes('No tickets')) {
-    return 'No tickets found in the specified date range - try a different date range';
-  } else if (message.includes('chunks')) {
-    return 'Chunking failed - tickets might have invalid data';
-  } else if (message.includes('embedding')) {
-    return 'Embedding failed - check OpenAI API key and balance';
-  } else if (message.includes('Pinecone')) {
-    return 'Pinecone error - check connection and API key';
-  }
-  return 'Check the error details above';
-}
+// ============================================================================
+// IMPORT FILE
+// ============================================================================
 
-/**
- * Import file to knowledge base
- * OPTIMIZED: Uses batched embeddings instead of parallel queue
- */
 export async function importFile(req, res) {
   let filePath = null;
   
   try {
     if (!req.file) {
       console.error("❌ No file in request");
-      console.error("Request keys:", Object.keys(req));
-      console.error("File:", req.file);
       return res.status(400).json({ 
         error: "No file uploaded",
         received: {
@@ -395,106 +350,216 @@ export async function importFile(req, res) {
     const fileData = await extractTextFromFile(filePath, fileType, fileName);
     const timestamp = Date.now();
 
+    // ── Branch 1: JSON file (articles or tickets) ──────────────────────────
     if (fileData.type === 'tickets') {
-      const tickets = extractTicketsFromJSON(fileData.data);
-      console.log(`🎫 Found ${tickets.length} tickets in JSON\n`);
-      
-      // Create all chunks
-      console.log(`✂️  Creating chunks...`);
-      const allChunks = [];
-      for (const ticket of tickets) {
-        const chunks = chunkTicketData(ticket);
-        allChunks.push(...chunks.map((chunk, i) => ({
-          chunk,
-          ticketId: ticket.ticket_id,
-          chunkIndex: i
-        })));
-      }
-      console.log(`✅ Created ${allChunks.length} chunks\n`);
-      
-      // Generate embeddings with batching
-      console.log(`🧮 Generating embeddings for ${allChunks.length} chunks...`);
-      const texts = allChunks.map(({ chunk }) => chunk.text);
-      
-      const embeddings = await embedTextBatch(texts, {
-        batchSize: 100,
-        batchDelay: 2000,
-        onProgress: (current, total) => {
-          if (current % 50 === 0) {
-            console.log(`   ⏳ Progress: ${current}/${total} (${Math.round(current / total * 100)}%)`);
+      const rawData = fileData.data;
+
+      // Detect Zendesk Help Center articles JSON: { articles: [...] }
+      const isArticlesJSON =
+        rawData &&
+        typeof rawData === "object" &&
+        Array.isArray(rawData.articles);
+
+      if (isArticlesJSON) {
+        // ── ARTICLES PATH ──────────────────────────────────────────────────
+        const articles = rawData.articles;
+        console.log(`📚 Detected Help Center articles JSON: ${articles.length} articles\n`);
+
+        const allChunks = [];
+        for (const article of articles) {
+          // Strip HTML tags from body
+          const plainBody = article.body
+            ? article.body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()
+            : "";
+
+          if (!plainBody && !article.title) {
+            console.warn(`⚠️  Skipping article ${article.id} — no content`);
+            continue;
           }
+
+          const textToEmbed = `${article.title || ""}\n\n${plainBody}`.trim();
+
+          allChunks.push({
+            text: textToEmbed,
+            articleId: String(article.id),
+            title: article.title || "",
+            url: article.html_url || "",
+            sectionId: String(article.section_id || ""),
+          });
         }
-      });
-      
-      console.log(`✅ Generated ${embeddings.length} embeddings\n`);
-      
-      // Prepare vectors
-      const vectors = embeddings.map((embedding, idx) => {
-        const { chunk, ticketId, chunkIndex } = allChunks[idx];
-        return {
-          id: `ticket-${ticketId}-chunk-${chunkIndex}-${timestamp}`,
-          values: embedding,
-          metadata: {
-            ...chunk.metadata,
-            content: chunk.text,
-            source: 'manual_upload',
-            fileName: fileName,
-            uploadedAt: new Date().toISOString()
+
+        console.log(`✅ Created ${allChunks.length} article chunks\n`);
+
+        console.log(`🧮 Generating embeddings for ${allChunks.length} articles...`);
+        const texts = allChunks.map((c) => c.text);
+
+        const embeddings = await embedTextBatch(texts, {
+          batchSize: 100,
+          batchDelay: 2000,
+          onProgress: (current, total) => {
+            if (current % 50 === 0) {
+              console.log(`   ⏳ Progress: ${current}/${total} (${Math.round((current / total) * 100)}%)`);
+            }
+          },
+        });
+
+        console.log(`✅ Generated ${embeddings.length} embeddings\n`);
+
+        const vectors = embeddings.map((embedding, idx) => {
+          const chunk = allChunks[idx];
+          return {
+            id: `article-${chunk.articleId}-${timestamp}`,
+            values: embedding,
+            metadata: {
+              source: "manual_upload",   // ← matches phase1 filter
+              type: "help_article",
+              articleId: chunk.articleId,
+              title: chunk.title,
+              text: chunk.text,          // ← buildBotPrompt reads this
+              url: chunk.url,
+              sectionId: chunk.sectionId,
+              fileName: fileName,
+              uploadedAt: new Date().toISOString(),
+            },
+          };
+        });
+
+        console.log(`📤 Uploading ${vectors.length} vectors to Pinecone...`);
+        await upsertVectors(vectors);
+        console.log(`✅ Upload complete\n`);
+
+        const customRecord = await createZendeskImportRecord({
+          startDate: new Date().toISOString().split("T")[0],
+          endDate: new Date().toISOString().split("T")[0],
+          ticketCount: articles.length,
+          source: "file_import",
+        });
+
+        return res.json({
+          status: "Articles imported successfully",
+          fileName: fileName,
+          type: "help_articles",
+          articlesProcessed: articles.length,
+          totalChunks: vectors.length,
+          zendeskRecordId: customRecord?.id || null,
+        });
+
+      } else {
+        // ── TICKETS PATH ───────────────────────────────────────────────────
+        const tickets = extractTicketsFromJSON(rawData);
+        console.log(`🎫 Found ${tickets.length} tickets in JSON\n`);
+
+        console.log(`✂️  Creating chunks...`);
+        const allChunks = [];
+        for (const ticket of tickets) {
+          const chunks = chunkTicketData(ticket);
+
+          if (!Array.isArray(chunks) || chunks.length === 0) {
+            console.warn(`⚠️  No chunks for ticket ${ticket.ticket_id}`);
+            continue;
           }
-        };
-      });
-      
-      console.log(`📤 Uploading ${vectors.length} vectors to Pinecone...`);
-      await upsertVectors(vectors);
-      console.log(`✅ Upload complete\n`);
-      
-      const customRecord = await createZendeskImportRecord({
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date().toISOString().split('T')[0],
-        ticketCount: tickets.length,
-        source: 'file_import'
-      });
-      
-      res.json({
-        status: "File imported successfully",
-        fileName: fileName,
-        type: "tickets",
-        ticketsProcessed: tickets.length,
-        totalChunks: embeddings.length,
-        zendeskRecordId: customRecord?.id || null
-      });
-      
+
+          allChunks.push(...chunks.map((chunk, i) => ({
+            chunk,
+            ticketId: ticket.ticket_id,
+            chunkIndex: i
+          })));
+        }
+        console.log(`✅ Created ${allChunks.length} chunks\n`);
+
+        if (allChunks.length === 0) {
+          return res.status(400).json({
+            error: "No chunks could be generated from tickets",
+            ticketsFound: tickets.length
+          });
+        }
+
+        console.log(`🧮 Generating embeddings for ${allChunks.length} chunks...`);
+        const texts = allChunks.map(({ chunk }) => chunk.text);
+
+        const embeddings = await embedTextBatch(texts, {
+          batchSize: 100,
+          batchDelay: 2000,
+          onProgress: (current, total) => {
+            if (current % 50 === 0) {
+              console.log(`   ⏳ Progress: ${current}/${total} (${Math.round(current / total * 100)}%)`);
+            }
+          }
+        });
+
+        console.log(`✅ Generated ${embeddings.length} embeddings\n`);
+
+        const vectors = embeddings.map((embedding, idx) => {
+          const { chunk, ticketId, chunkIndex } = allChunks[idx];
+          return {
+            id: `ticket-${ticketId}-chunk-${chunkIndex}-${timestamp}`,
+            values: embedding,
+            metadata: {
+              ...chunk.metadata,
+              content: chunk.text,
+              text: chunk.text,          // ← buildBotPrompt reads this
+              source: 'manual_upload',   // ← matches phase1 filter
+              fileName: fileName,
+              uploadedAt: new Date().toISOString(),
+            }
+          };
+        });
+
+        console.log(`📤 Uploading ${vectors.length} vectors to Pinecone...`);
+        await upsertVectors(vectors);
+        console.log(`✅ Upload complete\n`);
+
+        const customRecord = await createZendeskImportRecord({
+          startDate: new Date().toISOString().split('T')[0],
+          endDate: new Date().toISOString().split('T')[0],
+          ticketCount: tickets.length,
+          source: 'file_import'
+        });
+
+        return res.json({
+          status: "Tickets imported successfully",
+          fileName: fileName,
+          type: "tickets",
+          ticketsProcessed: tickets.length,
+          totalChunks: vectors.length,
+          zendeskRecordId: customRecord?.id || null
+        });
+      }
+
     } else {
-      // Simple text file
+      // ── Branch 2: Plain text file ────────────────────────────────────────
       const chunks = [fileData.data];
-      
+
       console.log(`🧮 Generating embeddings...`);
       const embeddings = await embedTextBatch(chunks, {
         batchSize: 100,
         batchDelay: 2000
       });
-      
+
       const vectors = embeddings.map((embedding, i) => ({
         id: `file-${timestamp}-${i}`,
         values: embedding,
         metadata: {
           title: fileName,
           content: chunks[i],
+          text: chunks[i],               // ← buildBotPrompt reads this
           source: 'manual_upload',
           uploadedAt: new Date().toISOString()
         }
       }));
-      
+
+      console.log(`📤 Uploading ${vectors.length} vectors to Pinecone...`);
       await upsertVectors(vectors);
-      
+      console.log(`✅ Upload complete\n`);
+
       const customRecord = await createZendeskImportRecord({
         startDate: new Date().toISOString().split('T')[0],
         endDate: new Date().toISOString().split('T')[0],
         ticketCount: 0,
         source: 'file_import'
       });
-      
-      res.json({
+
+      return res.json({
         status: "File imported successfully",
         fileName: fileName,
         type: "text",
@@ -520,7 +585,6 @@ export async function importFile(req, res) {
         errorDetails: err.stack || err.toString(),
         source: 'file_import'
       });
-
       return res.status(500).json({ 
         error: "File import failed", 
         details: err.message,
@@ -543,27 +607,10 @@ export async function importFile(req, res) {
   }
 }
 
-function getFileUploadSuggestion(message) {
-  if (message.includes('No file')) {
-    return 'Make sure you selected a file before uploading';
-  } else if (message.includes('rate')) {
-    return 'Rate limited - wait a few minutes and try again';
-  } else if (message.includes('JSON')) {
-    return 'File must be valid JSON format if uploading tickets';
-  } else if (message.includes('embedding')) {
-    return 'Embedding failed - check OpenAI API key and balance';
-  } else if (message.includes('Pinecone')) {
-    return 'Pinecone error - check connection and API key';
-  } else if (message.includes('file')) {
-    return 'File may be corrupted or in unsupported format';
-  }
-  return 'Check the error details above';
-}
+// ============================================================================
+// INGEST KB (direct articles array via API body)
+// ============================================================================
 
-/**
- * Ingest knowledge base articles
- * OPTIMIZED: Uses batched embeddings
- */
 export async function ingestKB(req, res) {
   try {
     const { articles } = req.body;
@@ -577,7 +624,6 @@ export async function ingestKB(req, res) {
 
     console.log(`\n📚 Processing ${articles.length} articles...`);
     
-    // Prepare texts
     const processedArticles = articles.map(article => ({
       article,
       cleanText: article.content.replace(/<[^>]+>/g, "").slice(0, 2000)
@@ -585,7 +631,6 @@ export async function ingestKB(req, res) {
     
     const texts = processedArticles.map(p => p.cleanText);
     
-    // Generate embeddings with batching
     console.log(`🧮 Generating embeddings...`);
     const embeddings = await embedTextBatch(texts, {
       batchSize: 100,
@@ -597,15 +642,17 @@ export async function ingestKB(req, res) {
       }
     });
     
-    // Prepare vectors
     const vectors = embeddings.map((embedding, idx) => {
       const { article, cleanText } = processedArticles[idx];
       return {
         id: `article-${article.id}`,
         values: embedding,
         metadata: {
+          source: 'manual_upload',       // ← matches phase1 filter
+          type: 'help_article',
           title: article.title,
           content: cleanText,
+          text: cleanText,               // ← buildBotPrompt reads this
         }
       };
     });
@@ -621,16 +668,14 @@ export async function ingestKB(req, res) {
   }
 }
 
-/**
- * Reset knowledge base
- */
+// ============================================================================
+// RESET KB
+// ============================================================================
+
 export async function resetKB(req, res) {
   try {
     await resetKnowledgeBase();
-    
-    // Clear embedding cache on reset
     clearEmbeddingCache();
-    
     res.json({ status: "KB reset successfully" });
   } catch (err) {
     console.error("❌ Reset error:", err);
@@ -638,14 +683,14 @@ export async function resetKB(req, res) {
   }
 }
 
-/**
- * Get index statistics
- */
+// ============================================================================
+// GET STATS
+// ============================================================================
+
 export async function getStats(req, res) {
   try {
     const stats = await getIndexStats();
     const cacheStats = getCacheStats();
-    
     res.json({
       ...stats,
       cache: {
@@ -659,14 +704,14 @@ export async function getStats(req, res) {
   }
 }
 
-/**
- * Clear embedding cache (new endpoint)
- */
+// ============================================================================
+// CLEAR CACHE
+// ============================================================================
+
 export async function clearCache(req, res) {
   try {
     const statsBefore = getCacheStats();
     clearEmbeddingCache();
-    
     res.json({ 
       status: "Cache cleared successfully",
       entriesCleared: statsBefore.size,
@@ -678,10 +723,10 @@ export async function clearCache(req, res) {
   }
 }
 
-/**
- * Test pagination - fetches tickets without chunking/embedding
- * Useful for testing large date ranges and pagination
- */
+// ============================================================================
+// TEST PAGINATION
+// ============================================================================
+
 export async function testPagination(req, res) {
   const startTime = Date.now();
   
@@ -698,7 +743,6 @@ export async function testPagination(req, res) {
     console.log(`📅 Date Range: ${startDate} to ${endDate}`);
     console.log(`${'='.repeat(60)}\n`);
     
-    // Only fetch tickets - no chunking, no embedding
     console.log(`📡 Fetching tickets...`);
     const tickets = await fetchTicketsByDateRange(startDate, endDate);
     
@@ -717,20 +761,40 @@ export async function testPagination(req, res) {
       status: "Pagination test completed",
       ticketsCount: tickets.length,
       processingTime: processingTime,
-      dateRange: {
-        start: startDate,
-        end: endDate
-      },
+      dateRange: { start: startDate, end: endDate },
       avgTimePerTicket: `${((Date.now() - startTime) / Math.max(tickets.length, 1)).toFixed(0)}ms`
     });
   } catch (err) {
     const processingTime = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
     console.error("❌ Pagination test error:", err.message);
-    
     res.status(500).json({
       status: "Pagination test failed",
       error: err.message,
       processingTime: processingTime
     });
   }
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+function getSuggestionForError(message) {
+  if (message.includes('rate')) return 'Rate limited - wait a few minutes and try again';
+  if (message.includes('401') || message.includes('authentication')) return 'Check your API credentials (OPENAI_API_KEY, ZENDESK_API_TOKEN)';
+  if (message.includes('No tickets')) return 'No tickets found in the specified date range - try a different date range';
+  if (message.includes('chunks')) return 'Chunking failed - tickets might have invalid data';
+  if (message.includes('embedding')) return 'Embedding failed - check OpenAI API key and balance';
+  if (message.includes('Pinecone')) return 'Pinecone error - check connection and API key';
+  return 'Check the error details above';
+}
+
+function getFileUploadSuggestion(message) {
+  if (message.includes('No file')) return 'Make sure you selected a file before uploading';
+  if (message.includes('rate')) return 'Rate limited - wait a few minutes and try again';
+  if (message.includes('JSON')) return 'File must be valid JSON format if uploading tickets';
+  if (message.includes('embedding')) return 'Embedding failed - check OpenAI API key and balance';
+  if (message.includes('Pinecone')) return 'Pinecone error - check connection and API key';
+  if (message.includes('file')) return 'File may be corrupted or in unsupported format';
+  return 'Check the error details above';
 }

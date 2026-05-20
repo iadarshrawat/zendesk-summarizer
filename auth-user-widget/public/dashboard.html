@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard - Support Portal</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f7fa;
+    }
+
+    .navbar {
+      background: white;
+      border-bottom: 1px solid #e0e0e0;
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    }
+
+    .brand {
+      font-size: 18px;
+      font-weight: 600;
+      color: #667eea;
+    }
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid #e0e0e0;
+    }
+
+    .user-details h3 {
+      font-size: 14px;
+      color: #1a1a1a;
+    }
+
+    .user-details p {
+      font-size: 12px;
+      color: #999;
+    }
+
+    .logout-btn {
+      background: #f0f0f0;
+      border: 1px solid #e0e0e0;
+      padding: 7px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #333;
+    }
+
+    .logout-btn:hover {
+      background: #e0e0e0;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 32px auto;
+      padding: 0 24px;
+    }
+
+    .status-box {
+      padding: 12px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      margin-bottom: 20px;
+      background: #f0f9ff;
+      border: 1px solid #b3e5fc;
+      color: #0277bd;
+    }
+
+    .card {
+      background: white;
+      border-radius: 10px;
+      padding: 28px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+      margin-bottom: 20px;
+    }
+
+    .card h2 {
+      font-size: 22px;
+      margin-bottom: 8px;
+    }
+
+    .card p {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+
+    .btn {
+      padding: 10px 22px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #5568d3;
+    }
+  </style>
+
+  <!--
+    KEY FIX: Use window.zESettings to pre-configure authentication BEFORE
+    the Zendesk snippet loads. The snippet reads zESettings synchronously
+    on init, so the JWT is fetched before any session is created — this
+    prevents Zendesk from starting an anonymous session and forgetting
+    previous chats.
+  -->
+  <script>
+    window.zESettings = {
+      authenticate: {
+        jwtFn: function (callback) {
+          // Fetch a fresh Zendesk JWT from your backend.
+          // The session cookie (set by Google OAuth) is sent automatically.
+          fetch("/api/zendesk-token", { credentials: "include" })
+            .then(function (r) {
+              if (!r.ok) throw new Error("zendesk-token failed: " + r.status);
+              return r.json();
+            })
+            .then(function (data) {
+              // Pass the signed JWT — Zendesk uses this from first init,
+              // so the authenticated session (and chat history) is restored.
+              callback(data.token);
+              console.log("[Zendesk] Session restored ✅");
+            })
+            .catch(function (err) {
+              console.error("[Zendesk] Token fetch failed:", err.message);
+            });
+        }
+      }
+    };
+  </script>
+
+  <!--
+    KEY FIX: Use window.zESettings to pre-configure authentication BEFORE
+    the Zendesk snippet loads. The snippet reads zESettings synchronously
+    on init, so the JWT is fetched before any session is created — this
+    prevents Zendesk from starting an anonymous session and forgetting
+    previous chats.
+  -->
+  <script>
+    window.zESettings = {
+      authenticate: {
+        jwtFn: function (callback) {
+          // Fetch a fresh Zendesk JWT from your backend.
+          // The session cookie (set by Google OAuth) is sent automatically.
+          fetch("/api/zendesk-token", { credentials: "include" })
+            .then(function (r) {
+              if (!r.ok) throw new Error("zendesk-token failed: " + r.status);
+              return r.json();
+            })
+            .then(function (data) {
+              // Pass the signed JWT — Zendesk uses this from first init,
+              // so the authenticated session (and chat history) is restored.
+              callback(data.token);
+              console.log("[Zendesk] ✅ Session restored with authenticated user");
+            })
+            .catch(function (err) {
+              console.error("[Zendesk] ❌ Token fetch failed:", err.message);
+            });
+        }
+      }
+    };
+  </script>
+
+  <!-- Official Zendesk Web Widget — loads AFTER zESettings is defined -->
+  <script id="ze-snippet"
+    src="https://static.zdassets.com/ekr/snippet.js?key=4200724f-94bb-4a43-b68b-4f8cc65407bc"></script>
+
+<body>
+  <div class="navbar">
+    <div class="brand">🚀 Support Portal</div>
+    <div class="user-info">
+      <img id="avatar" class="avatar" alt="avatar" />
+      <div class="user-details">
+        <h3 id="name">Loading…</h3>
+        <p id="email">-</p>
+      </div>
+      <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Your Conversations</h2>
+    <div id="chat-list" style="margin-top: 15px">
+      <p style="color: #999">Fetching your chat history...</p>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="status-box" id="status">⏳ Initializing…</div>
+    <div class="card">
+      <h2>Welcome! 👋</h2>
+      <p>
+        You are signed in. The Zendesk chat widget is in the bottom-right
+        corner.
+      </p>
+      <button class="btn btn-primary" onclick="openChat()">
+        💬 Open Chat
+      </button>
+    </div>
+  </div>
+
+  <script>
+    let appToken = null;
+
+    function setStatus(msg) {
+      document.getElementById("status").innerHTML = msg;
+    }
+
+    async function loadConversations() {
+      try {
+        const res = await fetch("/api/conversations", {
+          headers: { Authorization: "Bearer " + appToken },
+        });
+
+        if (!res.ok) throw new Error("Conversations fetch failed: " + res.status);
+
+        const conversations = await res.json();
+        const listDiv = document.getElementById("chat-list");
+
+        if (!Array.isArray(conversations) || conversations.length === 0) {
+          listDiv.innerHTML = "<p>No previous chats found.</p>";
+          return;
+        }
+
+        listDiv.innerHTML = conversations
+          .map(
+            (c) => `
+            <div style="padding: 12px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <strong>${c.displayName || "Support Chat"}</strong>
+                <p style="font-size: 12px; color: #666;">ID: ${c.id}</p>
+              </div>
+              <span style="font-size: 11px; color: #aaa;">
+                ${new Date(c.lastUpdatedAt).toLocaleDateString()}
+              </span>
+            </div>
+          `
+          )
+          .join("");
+      } catch (err) {
+        console.error("loadConversations error:", err);
+        document.getElementById("chat-list").innerHTML =
+          "<p>Error loading chats: " + err.message + "</p>";
+      }
+    }
+
+    window.addEventListener("load", async function () {
+      try {
+        // Step 1: Fetch user info from backend
+        const res = await fetch("/api/user", { credentials: "include" });
+
+        if (res.status === 401) {
+          window.location.href = "/";
+          return;
+        }
+
+        if (!res.ok) throw new Error("Server error: " + res.status);
+
+        const { token, name, email, avatar } = await res.json();
+        appToken = token;
+
+        document.getElementById("name").textContent = name;
+        document.getElementById("email").textContent = email;
+        document.getElementById("avatar").src = avatar || "";
+
+        setStatus("✅ Signed in as " + email);
+
+        // Step 2: Load conversation history
+        await loadConversations();
+
+        setStatus("✅ Signed in as " + email + " — Widget authenticated");
+
+      } catch (err) {
+        setStatus("❌ " + err.message);
+        console.error(err);
+      }
+    });
+
+    function openChat() {
+      if (typeof zE !== "undefined") zE("messenger", "open");
+    }
+
+    async function logout() {
+      if (typeof zE !== "undefined") zE("messenger", "logoutUser");
+      await fetch("/logout", { method: "POST", credentials: "include" });
+      window.location.href = "/";
+    }
+  </script>
+</body>
+
+</html>
