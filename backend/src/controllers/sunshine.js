@@ -10,6 +10,7 @@ import { generateContent } from "../config/openai.js";
 import { queryVectors } from "../config/pinecone.js";
 import { embedText } from "../services/embedding.js";
 import { createSunshineClient } from "../config/sunshine.js";
+import { buildReplyBotPrompt } from "../utils/prompts.js";
 import { updateTicket, getTicket } from "../services/ticketManager.js";
 
 dotenv.config();
@@ -20,10 +21,6 @@ const conversationFormData = new Map();
 // Track escalated conversations - store conversation IDs where agent has taken control
 const escalatedConversations = new Set();
 
-// ============================================================================
-// MAIN WEBHOOK HANDLER
-// ============================================================================
-
 export async function handleSunshineMessage(req, res) {
   try {
     const payload = req.body;
@@ -31,7 +28,11 @@ export async function handleSunshineMessage(req, res) {
     // Send 200 immediately so Zendesk doesn't timeout
     res.status(200).json({ success: true, received: true });
 
-    if (!payload.events || !Array.isArray(payload.events) || payload.events.length === 0) {
+    if (
+      !payload.events ||
+      !Array.isArray(payload.events) ||
+      payload.events.length === 0
+    ) {
       console.error("Missing events in webhook payload");
       return;
     }
@@ -40,76 +41,85 @@ export async function handleSunshineMessage(req, res) {
       try {
         for (const event of payload.events) {
           try {
-
-            // ----------------------------------------------------------------
-            // Handle metadata update (ticket created after agent accepts)
-            // ----------------------------------------------------------------
+            // Handle ticket creation event
             if (event.type === "conversation:updatedmetadata") {
               console.log("Handling conversation:updatedmetadata event");
               const conversationId = event.payload.conversation?.id;
-              const metadata       = event.payload.conversation?.metadata;
-              const ticketId       = metadata?.["zd:ticket"]?.id;
+              const metadata = event.payload.conversation?.metadata;
+              const ticketId = metadata?.["zd:ticket"]?.id;
 
               if (ticketId && conversationId) {
                 try {
                   const formData = conversationFormData.get(conversationId);
+
                   if (formData && formData.data) {
                     const { name, email } = formData.data;
-                    console.log(`✅ Ticket ${ticketId} created with customer: ${name} (${email})`);
+                    console.log(
+                      `✅ Ticket ${ticketId} created with customer: ${name} (${email})`,
+                    );
                     const ticket = await getTicket(ticketId);
                     console.log(`Ticket requester ID: ${ticket.requester_id}`);
                   } else {
-                    console.log(`ℹ️ Ticket ${ticketId} created but no form data for conversation ${conversationId}`);
+                    console.log(
+                      `ℹ️ Ticket ${ticketId} created but no form data found for conversation ${conversationId}`,
+                    );
                   }
+
                   conversationFormData.delete(conversationId);
                 } catch (err) {
                   console.error("Could not process ticket:", err.message);
                 }
               }
+
               continue;
             }
 
-            // ----------------------------------------------------------------
             // Only process conversation:message events
-            // ----------------------------------------------------------------
-            if (event.type !== "conversation:message") continue;
+            if (event.type !== "conversation:message") {
+              continue;
+            }
 
-            if (!event.payload || !event.payload.conversation || !event.payload.message) {
+            if (
+              !event.payload ||
+              !event.payload.conversation ||
+              !event.payload.message
+            ) {
               console.error("Missing payload fields in event");
               continue;
             }
 
             const conversationId = event.payload.conversation.id;
 
-            // ----------------------------------------------------------------
-            // Processing guard — prevent duplicate webhook handling
-            // ----------------------------------------------------------------
+            // ✅ Guard: skip if already being processed
             if (conversationFormData.get(conversationId)?.processing) {
-              console.log(`Skipping duplicate event for conversation ${conversationId}`);
+              console.log(
+                `Skipping duplicate event for conversation ${conversationId}`,
+              );
               continue;
             }
 
             // Mark as processing — preserve existing form data
             const existingData = conversationFormData.get(conversationId);
-            conversationFormData.set(conversationId, { ...existingData, processing: true });
+            conversationFormData.set(conversationId, {
+              ...existingData,
+              processing: true,
+            });
 
-            // Helper: clear processing flag on every exit path
+            // ✅ Helper: clears processing flag after every exit path
             const clearProcessing = () => {
               const d = conversationFormData.get(conversationId);
               if (!d) return;
               if (Object.keys(d).length === 1 && d.processing) {
+                // Only flag exists, no real data — delete entirely
                 conversationFormData.delete(conversationId);
               } else {
+                // Real form data exists — just clear the flag
                 d.processing = false;
               }
             };
 
-            // ----------------------------------------------------------------
-            // Extract event data
-            // ----------------------------------------------------------------
             const messageBody = event.payload.message.content?.text;
-            const author      = event.payload.message.author;
-            const userName    = author.displayName || "Customer";
+            const author = event.payload.message.author;
 
             const activeSwitchboardIntegration =
               event.payload.conversation?.activeSwitchboardIntegration?.id ||
@@ -122,43 +132,57 @@ export async function handleSunshineMessage(req, res) {
                 activeSwitchboardIntegration.includes("agent"));
 
             const isEscalated = escalatedConversations.has(conversationId);
+            const userName = author.displayName || "Customer";
 
-            // ----------------------------------------------------------------
             // Skip bot/system/agent messages
-            // ----------------------------------------------------------------
             if (
               author.type === "business" ||
               author.displayName?.includes("BOT") ||
               author.displayName?.includes("bot") ||
               author.subtypes?.includes("AI")
             ) {
-              clearProcessing(); continue;
+              clearProcessing();
+              continue;
             }
 
             // Only process customer/user messages
             if (author.type !== "user" && author.type !== "end_user") {
-              clearProcessing(); continue;
+              clearProcessing();
+              continue;
             }
 
-            // ----------------------------------------------------------------
             // Handle form submission
-            // ----------------------------------------------------------------
             if (
               event.payload.message.content?.type === "formResponse" &&
               event.payload.message.content?.fields
             ) {
               const fields = event.payload.message.content.fields || [];
 
-              const customerName     = fields.find((f) => f.name === "name")?.text || userName || "Customer";
-              const customerEmail    = fields.find((f) => f.name === "email")?.email || process.env.ZENDESK_EMAIL;
-              const issueCategory    = fields.find((f) => f.name === "category")?.select?.[0]?.name || "general";
-              const issueDescription = fields.find((f) => f.name === "description")?.text || "No description provided";
-              const webUserId        = author.userId;
+              const customerName =
+                fields.find((f) => f.name === "name")?.text ||
+                userName ||
+                "Customer";
+              const customerEmail =
+                fields.find((f) => f.name === "email")?.email ||
+                process.env.ZENDESK_EMAIL;
+              const issueCategory =
+                fields.find((f) => f.name === "category")?.select?.[0]?.name ||
+                "general";
+              const issueDescription =
+                fields.find((f) => f.name === "description")?.text ||
+                "No description provided";
+              const webUserId = author.userId;
 
-              // Store form data (overwrites processing flag with real data)
+              // Store form data (overwrite processing flag with real data)
               conversationFormData.set(conversationId, {
                 status: "form_submitted",
-                data: { name: customerName, email: customerEmail, category: issueCategory, description: issueDescription, webUserId },
+                data: {
+                  name: customerName,
+                  email: customerEmail,
+                  category: issueCategory,
+                  description: issueDescription,
+                  webUserId: webUserId,
+                },
                 submittedAt: Date.now(),
               });
 
@@ -172,79 +196,121 @@ export async function handleSunshineMessage(req, res) {
                       type: "text",
                       text: `Thank you ${customerName}! Would you like to escalate to a human agent to discuss your ${issueCategory} issue?`,
                       actions: [
-                        { type: "reply", text: "✅ Yes, Connect me to Agent", payload: "ESCALATE_TO_AGENT" },
-                        { type: "reply", text: "❌ No, Cancel",               payload: "CANCEL_ESCALATION"  },
+                        {
+                          type: "reply",
+                          text: "✅ Yes, Connect me to Agent",
+                          payload: "ESCALATE_TO_AGENT",
+                        },
+                        {
+                          type: "reply",
+                          text: "❌ No, Cancel",
+                          payload: "CANCEL_ESCALATION",
+                        },
                       ],
                     },
-                  }
+                  },
                 );
-              } catch (err) {
-                console.error("Failed to send quick reply after form:", err.message);
+              } catch (quickReplyErr) {
+                console.error(
+                  "Failed to send quick reply:",
+                  quickReplyErr.message,
+                );
               }
 
-              // Real data freshly written above — no clearProcessing needed
+              // Note: don't call clearProcessing here — form data was just set fresh above
               continue;
             }
 
-            // ----------------------------------------------------------------
-            // Require messageBody for all remaining flows
-            // ----------------------------------------------------------------
+            // No messageBody for non-form messages
             if (!messageBody) {
-              clearProcessing(); continue;
+              clearProcessing();
+              continue;
             }
 
-            // ----------------------------------------------------------------
-            // Handle ESCALATE_TO_AGENT quick reply
-            // ----------------------------------------------------------------
-            if (messageBody === "ESCALATE_TO_AGENT" || messageBody === "✅ Yes, Connect me to Agent") {
+            // Handle ESCALATE_TO_AGENT
+            if (
+              messageBody === "ESCALATE_TO_AGENT" ||
+              messageBody === "✅ Yes, Connect me to Agent"
+            ) {
               const formData = conversationFormData.get(conversationId);
-
               if (!formData || !formData.data) {
-                console.error("No form data found for escalation");
+                console.error(`No form data found for escalation`);
                 try {
-                  await sendSunshineMessage(conversationId, "Sorry, I couldn't find your form data. Please try again.");
+                  await sendSunshineMessage(
+                    conversationId,
+                    "Sorry, I couldn't find your form data. Please try again.",
+                  );
                 } catch (err) {
                   console.error(`Could not send message: ${err.message}`);
                 }
-                clearProcessing(); continue;
+                clearProcessing();
+                continue;
               }
 
-              const { name, email, category, webUserId } = formData.data;
+              const { name, email, category, description, webUserId } =
+                formData.data;
 
               try {
-                await escalateToAgent(conversationId, name, email, webUserId, activeSwitchboardIntegration);
+                await escalateToAgent(
+                  conversationId,
+                  name,
+                  email,
+                  webUserId,
+                  activeSwitchboardIntegration,
+                );
+
                 escalatedConversations.add(conversationId);
-                setTimeout(() => { escalatedConversations.delete(conversationId); }, 2 * 60 * 60 * 1000);
+                setTimeout(
+                  () => {
+                    escalatedConversations.delete(conversationId);
+                  },
+                  2 * 60 * 60 * 1000,
+                );
+
+                // Delete entirely — escalation done, no more form data needed
                 conversationFormData.delete(conversationId);
               } catch (escalateErr) {
-                console.error("Failed to escalate to agent:", escalateErr.message);
+                console.error(
+                  "Failed to escalate to agent:",
+                  escalateErr.message,
+                );
                 try {
-                  await sendSunshineMessage(conversationId, "Sorry, there was an issue connecting you to an agent. Please try again.");
+                  await sendSunshineMessage(
+                    conversationId,
+                    "Sorry, there was an issue connecting you to an agent. Please try again.",
+                  );
                 } catch (msgErr) {
-                  console.error(`Could not send error message: ${msgErr.message}`);
+                  console.error(
+                    `Could not send error message: ${msgErr.message}`,
+                  );
                 }
                 clearProcessing();
               }
+
               continue;
             }
 
-            // ----------------------------------------------------------------
-            // Handle CANCEL_ESCALATION quick reply
-            // ----------------------------------------------------------------
-            if (messageBody === "CANCEL_ESCALATION" || messageBody === "❌ No, Cancel") {
+            // Handle CANCEL_ESCALATION
+            if (
+              messageBody === "CANCEL_ESCALATION" ||
+              messageBody === "❌ No, Cancel"
+            ) {
               conversationFormData.delete(conversationId);
+
               try {
-                await sendSunshineMessage(conversationId, "No problem! Is there anything else I can help you with?");
+                await sendSunshineMessage(
+                  conversationId,
+                  "No problem! Is there anything else I can help you with?",
+                );
               } catch (err) {
                 console.error(`Could not send message: ${err.message}`);
               }
-              // Map entry deleted above — no clearProcessing needed
+
+              // Note: conversationFormData deleted above, no need to clearProcessing
               continue;
             }
 
-            // ----------------------------------------------------------------
-            // Step 1: Embed user message
-            // ----------------------------------------------------------------
+            // Embed message
             let messageEmbedding;
             try {
               messageEmbedding = await embedText(messageBody);
@@ -253,22 +319,34 @@ export async function handleSunshineMessage(req, res) {
               messageEmbedding = null;
             }
 
-            // ----------------------------------------------------------------
-            // Step 2: Search knowledge base (2-phase)
-            // ----------------------------------------------------------------
+            // Search knowledge base (2-phase)
             let selectedArticles = [];
 
             if (messageEmbedding) {
               try {
-                const phase1Results = await queryVectors(messageEmbedding, 10, true, { source: "manual_upload" });
+                const phase1Results = await queryVectors(
+                  messageEmbedding,
+                  10,
+                  true,
+                  { source: "manual_upload" },
+                );
                 console.log("Phase 1 KB search results:", phase1Results.matches);
-                const phase1Filtered = (phase1Results.matches || []).filter((r) => r.score >= 0.5);
+                const phase1Filtered = (phase1Results.matches || []).filter(
+                  (r) => r.score >= 0.5,
+                );
 
                 if (phase1Filtered.length > 0) {
                   selectedArticles = phase1Filtered.slice(0, 5);
                 } else {
-                  const phase2Results = await queryVectors(messageEmbedding, 10, true, { source: "ticket_chat" });
-                  const phase2Filtered = (phase2Results.matches || []).filter((r) => r.score >= 0.4);
+                  const phase2Results = await queryVectors(
+                    messageEmbedding,
+                    10,
+                    true,
+                    { source: "ticket_chat" },
+                  );
+                  const phase2Filtered = (phase2Results.matches || []).filter(
+                    (r) => r.score >= 0.4,
+                  );
                   if (phase2Filtered.length > 0) {
                     selectedArticles = phase2Filtered.slice(0, 5);
                   }
@@ -278,12 +356,9 @@ export async function handleSunshineMessage(req, res) {
               }
             }
 
-            // ----------------------------------------------------------------
-            // Step 3: Check if customer wants escalation
-            // ----------------------------------------------------------------
+            // Check if customer wants escalation
             try {
               const wantsEscalation = await shouldCreateTicket(messageBody);
-
               if (wantsEscalation) {
                 const hasFormData = conversationFormData.has(conversationId);
 
@@ -296,9 +371,14 @@ export async function handleSunshineMessage(req, res) {
                     timestamp: Date.now(),
                   });
 
-                  setTimeout(() => { conversationFormData.delete(conversationId); }, 30 * 60 * 1000);
+                  setTimeout(
+                    () => {
+                      conversationFormData.delete(conversationId);
+                    },
+                    30 * 60 * 1000,
+                  );
 
-                  // Real data freshly written above — no clearProcessing needed
+                  // Note: real data just set above, don't clearProcessing
                   continue;
                 }
 
@@ -306,7 +386,13 @@ export async function handleSunshineMessage(req, res) {
                 const { name, email, webUserId } = formData.data;
 
                 await sendEscalationMessage(conversationId, userName);
-                await escalateToAgent(conversationId, name, email, webUserId, activeSwitchboardIntegration);
+                await escalateToAgent(
+                  conversationId,
+                  name,
+                  email,
+                  webUserId,
+                  activeSwitchboardIntegration,
+                );
 
                 conversationFormData.delete(conversationId);
                 continue;
@@ -315,19 +401,16 @@ export async function handleSunshineMessage(req, res) {
               console.error("Escalation check failed:", err.message);
             }
 
-            // ----------------------------------------------------------------
-            // Step 4: Skip bot reply if agent is handling
-            // ----------------------------------------------------------------
+            // Skip bot reply if agent is handling
             if (isAgentActive || isEscalated) {
-              clearProcessing(); continue;
+              clearProcessing();
+              continue;
             }
 
-            // ----------------------------------------------------------------
-            // Step 5: Generate bot reply
-            // ----------------------------------------------------------------
+            // Generate and send bot reply
             let botReply;
             try {
-              const history   = await getConversationHistory(conversationId);
+              const history = await getConversationHistory(conversationId);
               const dbContext = await searchDatabase(messageBody);
 
               const prompt = `
@@ -377,7 +460,12 @@ Conversation History:
 ${history}
 
 Knowledge Base:
-${selectedArticles.map((a) => a.metadata?.text).filter(Boolean).join("\n") || "NO RELEVANT ARTICLES FOUND"}
+${
+  selectedArticles
+    .map((a) => a.metadata?.text)
+    .filter(Boolean)
+    .join("\n") || "NO RELEVANT fARTICLES FOUND"
+}
 
 Customer Message:
 ${messageBody}
@@ -389,32 +477,34 @@ REMEMBER: If Knowledge Base says "NO RELEVANT ARTICLES FOUND" and the message is
               botReply = await generateContent(prompt);
             } catch (err) {
               console.error("OpenAI generation error:", err.message);
-              botReply = "I'm sorry, I encountered an issue generating a response. Please try again.";
+              botReply =
+                "I'm sorry, I encountered an issue generating a response. Please try again.";
             }
 
-            // ----------------------------------------------------------------
-            // Step 6: Generate optimized quick replies (KB-grounded)
-            // ----------------------------------------------------------------
-            let quickReplies = [];
             try {
-              quickReplies = await generateSmartQuickReplies(messageBody, botReply, selectedArticles);
-            } catch (err) {
-              console.error("Quick reply generation error:", err.message);
-              quickReplies = [];
-            }
+              let quickReplies = await generateSmartQuickReplies(
+                messageBody,
+                botReply,
+                selectedArticles,
+              );
 
-            // ----------------------------------------------------------------
-            // Step 7: Send reply
-            // ----------------------------------------------------------------
-            try {
-              await sendSunshineMessage(conversationId, { text: botReply, quickReplies });
+              if (!quickReplies || quickReplies.length === 0) {
+                quickReplies = await generateDynamicQuickReplies(
+                  messageBody,
+                  botReply,
+                );
+              }
+
+              await sendSunshineMessage(conversationId, {
+                text: botReply,
+                quickReplies,
+              });
             } catch (err) {
               console.error("Failed to send reply:", err.message);
             }
 
-            // Always clear processing at end of normal flow
+            // ✅ Always clear processing at end of normal flow
             clearProcessing();
-
           } catch (eventErr) {
             console.error("Error processing event:", eventErr.message);
           }
@@ -423,165 +513,65 @@ REMEMBER: If Knowledge Base says "NO RELEVANT ARTICLES FOUND" and the message is
         console.error("Error in background processing:", processErr.message);
       }
     });
-
   } catch (err) {
     console.error("Error in webhook handler:", err.message);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Failed to process message", details: err.message });
+      res
+        .status(500)
+        .json({ error: "Failed to process message", details: err.message });
     }
   }
 }
 
-// ============================================================================
-// SEND MESSAGE
-// ============================================================================
-
 async function sendSunshineMessage(conversationId, message) {
   try {
-    if (!process.env.SUNSHINE_APP_ID) throw new Error("SUNSHINE_APP_ID not configured");
+    if (!process.env.SUNSHINE_APP_ID) {
+      throw new Error("SUNSHINE_APP_ID not configured in .env");
+    }
 
-    const sunshineClient  = createSunshineClient();
-    const text            = typeof message === "string" ? message : message.text;
-    const quickReplies    = typeof message === "object"  ? message.quickReplies : null;
+    const sunshineClient = createSunshineClient();
+    const text = typeof message === "string" ? message : message.text;
+    const quickReplies =
+      typeof message === "object" ? message.quickReplies : null;
 
     const payload = {
       author: { type: "business" },
       content: {
         type: "text",
         text: text,
-        ...(quickReplies && quickReplies.length > 0 && {
-          actions: quickReplies.map((q) => ({
-            type:    "reply",
-            text:    q,
-            payload: q.toUpperCase().replace(/[^A-Z0-9]+/g, "_"),
-          })),
-        }),
+        ...(quickReplies &&
+          quickReplies.length > 0 && {
+            actions: quickReplies.map((q) => ({
+              type: "reply",
+              text: q,
+              payload: q.toUpperCase().replace(/[^A-Z0-9]+/g, "_"),
+            })),
+          }),
       },
     };
 
     const response = await sunshineClient.post(
       `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages`,
-      payload
+      payload,
     );
+
     return response.data;
   } catch (err) {
-    console.error("Failed to send Sunshine message:", err.response?.data || err.message);
+    console.error(
+      "Failed to send Sunshine message:",
+      err.response?.data || err.message,
+    );
     throw err;
   }
 }
 
-// ============================================================================
-// QUICK REPLIES — Optimized with KB grounding + smart suppression
-// ============================================================================
-
-/**
- * Gate 1: Decide if quick replies should be suppressed entirely.
- * Suppresses on: greetings, complete answers, bot asked clarification, escalation flow.
- */
-async function shouldSuppressQuickReplies(userMessage, botReply) {
-  try {
-    const prompt = `You are analyzing a support chat message pair.
-
-User message: "${userMessage}"
-Bot reply: "${botReply}"
-
-Decide if quick reply buttons should be SUPPRESSED (hidden).
-
-Suppress quick replies if ANY of these are true:
-1. User message is a greeting or simple acknowledgement (hi, hello, thanks, bye, ok, cool, got it, sure)
-2. Bot reply is very clear and complete — user has nothing obvious to ask next
-3. Bot reply ends with a question asking the user for more info (clarification)
-4. This is part of an escalation or agent handoff flow
-
-Respond ONLY with "suppress" or "show". Nothing else.`;
-
-    const response = await generateContent(prompt);
-    return response.toLowerCase().trim() === "suppress";
-  } catch (err) {
-    console.error("Suppress check error:", err.message);
-    return false; // default: show on error
-  }
-}
-
-/**
- * Gate 2: Generate KB-grounded quick replies in question format.
- * Each reply must match a real KB article topic.
- * Returns empty array if suppressed or no KB titles available.
- */
-async function generateSmartQuickReplies(userMessage, botReply, selectedArticles) {
-  try {
-    // Gate 1: suppress check
-    const suppress = await shouldSuppressQuickReplies(userMessage, botReply);
-    if (suppress) {
-      console.log("✅ Quick replies suppressed");
-      return [];
-    }
-
-    // Gate 2: need KB titles to ground replies
-    const kbTitles = (selectedArticles || [])
-      .slice(0, 5)
-      .map((a) => a.metadata?.title)
-      .filter(Boolean);
-
-    if (kbTitles.length === 0) {
-      console.log("ℹ️ No KB titles available — skipping quick replies");
-      return [];
-    }
-
-    const kbContext = kbTitles.join("\n- ");
-
-    const prompt = `You are generating quick reply buttons for a support chat.
-
-User message: "${userMessage}"
-Bot reply: "${botReply}"
-
-Available Knowledge Base topics:
-- ${kbContext}
-
-Your job:
-Generate up to 3 quick reply questions the user is MOST LIKELY to ask next, based ONLY on the KB topics listed above.
-
-Rules:
-- Format: Question only (e.g. "How do I reset my password?")
-- Must be directly related to one of the KB topics listed above
-- Must feel natural as a follow-up to this conversation
-- Max 8 words per question
-- No generic questions like "How can I get help?"
-- If fewer than 3 KB topics are relevant, return fewer — do not force 3
-- If NO KB topic is relevant to this conversation, return empty array []
-
-Return ONLY a valid JSON array of strings. No markdown. No explanation.
-Example: ["How do I update my billing info?", "How do I cancel my subscription?"]`;
-
-    const res     = await generateContent(prompt);
-    const cleaned = res.replace(/```json|```/g, "").trim();
-    const parsed  = JSON.parse(cleaned);
-
-    if (!Array.isArray(parsed)) return [];
-
-    const filtered = parsed
-      .filter((q) => typeof q === "string" && q.trim().length > 0)
-      .slice(0, 3);
-
-    console.log(`✅ Quick replies generated: ${JSON.stringify(filtered)}`);
-    return filtered;
-
-  } catch (err) {
-    console.error("Smart quick reply error:", err.message);
-    return []; // empty — no fallback, no generic replies
-  }
-}
-
-// ============================================================================
-// CONVERSATION HISTORY
-// ============================================================================
-
 async function getConversationHistory(conversationId) {
   try {
     const client = createSunshineClient();
-    const res    = await client.get(
-      `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages?limit=10`
+    const res = await client.get(
+      `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages?limit=10`,
     );
+
     return res.data.messages
       .slice(-6)
       .map((m) => {
@@ -595,24 +585,138 @@ async function getConversationHistory(conversationId) {
   }
 }
 
-// ============================================================================
-// DATABASE SEARCH
-// ============================================================================
-
 async function searchDatabase(message) {
   try {
     const tickets = await Ticket.find({
       description: { $regex: message, $options: "i" },
     }).limit(3);
-    return tickets.map((t) => `Ticket: ${t.subject} | ${t.description}`).join("\n");
+
+    return tickets
+      .map((t) => `Ticket: ${t.subject} | ${t.description}`)
+      .join("\n");
   } catch (err) {
     return "";
   }
 }
 
-// ============================================================================
-// ESCALATION DETECTION
-// ============================================================================
+async function generateSmartQuickReplies(
+  userMessage,
+  botReply,
+  selectedArticles,
+) {
+  try {
+    const prompt = `
+User message: "${userMessage}"
+Bot reply: "${botReply}"
+
+Generate 3 quick reply options from USER perspective.
+
+Rules:
+- Max 3 options
+- Each <= 4 words
+- Must feel like USER is clicking it
+- Action or intent based
+- No generic words like Help or Info
+
+Examples:
+Bad: Help, More info
+Good: Check warranty, Contact support, Track order
+
+Return JSON array only.
+`;
+
+    const res = await generateContent(prompt);
+    const parsed = JSON.parse(res);
+
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed.slice(0, 3);
+    }
+
+    throw new Error("Invalid AI response");
+  } catch (err) {
+    console.error("Smart quick reply error:", err.message);
+    return null;
+  }
+}
+
+async function sendDetailCollectionForm(conversationId) {
+  try {
+    if (
+      !process.env.SUNSHINE_APP_ID ||
+      !process.env.ZENDESK_DOMAIN ||
+      !process.env.SUNSHINE_KEY_ID ||
+      !process.env.SUNSHINE_KEY_SECRET
+    ) {
+      throw new Error("Missing required config");
+    }
+
+    const payload = {
+      author: { type: "business" },
+      content: {
+        type: "form",
+        text: "Please fill out this form to help us assist you better.",
+        fields: [
+          {
+            type: "text",
+            name: "name",
+            label: "Your Name",
+            placeholder: "Enter your full name...",
+            required: true,
+          },
+          {
+            type: "email",
+            name: "email",
+            label: "Email Address",
+            placeholder: "Enter your email...",
+            required: true,
+          },
+          {
+            type: "select",
+            name: "category",
+            label: "Issue Category",
+            placeholder: "Choose the category of your issue...",
+            required: true,
+            options: [
+              { name: "billing", label: "Billing & Payments" },
+              { name: "technical", label: "Technical Support" },
+              { name: "account", label: "Account & Profile" },
+              { name: "general", label: "General Inquiry" },
+              { name: "other", label: "Other" },
+            ],
+          },
+          {
+            type: "text",
+            name: "description",
+            label: "Describe Your Issue",
+            placeholder: "Please describe the issue in detail...",
+            required: true,
+          },
+        ],
+      },
+    };
+
+    const endpoint = `/sc/v2/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages`;
+    const fullURL = `https://${process.env.ZENDESK_DOMAIN}.zendesk.com${endpoint}`;
+    const auth = Buffer.from(
+      `${process.env.SUNSHINE_KEY_ID}:${process.env.SUNSHINE_KEY_SECRET}`,
+    ).toString("base64");
+
+    const response = await axios.post(fullURL, payload, {
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    return response.data;
+  } catch (err) {
+    console.error(
+      "Failed to send detail collection form:",
+      err.response?.data || err.message,
+    );
+    throw err;
+  }
+}
 
 async function shouldCreateTicket(messageBody) {
   try {
@@ -640,178 +744,170 @@ Respond ONLY with "yes" or "no". Nothing else.`;
   }
 }
 
-// ============================================================================
-// DETAIL COLLECTION FORM
-// ============================================================================
-
-async function sendDetailCollectionForm(conversationId) {
+async function escalateToAgent(
+  conversationId,
+  customerName,
+  customerEmail,
+  webUserId,
+  activeSwitchboardIntegration,
+) {
   try {
-    if (!process.env.SUNSHINE_APP_ID || !process.env.ZENDESK_DOMAIN || !process.env.SUNSHINE_KEY_ID || !process.env.SUNSHINE_KEY_SECRET) {
-      throw new Error("Missing required config for form");
+    if (!process.env.SUNSHINE_APP_ID) {
+      throw new Error("SUNSHINE_APP_ID not configured in .env");
     }
 
-    const payload = {
-      author: { type: "business" },
-      content: {
-        type: "form",
-        text: "Please fill out this form to help us assist you better.",
-        fields: [
-          { type: "text",   name: "name",        label: "Your Name",           placeholder: "Enter your full name...",                required: true },
-          { type: "email",  name: "email",        label: "Email Address",       placeholder: "Enter your email...",                    required: true },
-          {
-            type: "select", name: "category",     label: "Issue Category",      placeholder: "Choose the category of your issue...",   required: true,
-            options: [
-              { name: "billing",   label: "Billing & Payments" },
-              { name: "technical", label: "Technical Support"  },
-              { name: "account",   label: "Account & Profile"  },
-              { name: "general",   label: "General Inquiry"    },
-              { name: "other",     label: "Other"              },
-            ],
-          },
-          { type: "text",   name: "description",  label: "Describe Your Issue", placeholder: "Please describe the issue in detail...", required: true },
-        ],
-      },
-    };
-
-    const fullURL = `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/sc/v2/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/messages`;
-    const auth    = Buffer.from(`${process.env.SUNSHINE_KEY_ID}:${process.env.SUNSHINE_KEY_SECRET}`).toString("base64");
-
-    const response = await axios.post(fullURL, payload, {
-      headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
-    });
-
-    return response.data;
-  } catch (err) {
-    console.error("Failed to send detail collection form:", err.response?.data || err.message);
-    throw err;
-  }
-}
-
-// ============================================================================
-// ESCALATE TO AGENT
-// ============================================================================
-
-async function escalateToAgent(conversationId, customerName, customerEmail, webUserId, activeSwitchboardIntegration) {
-  try {
-    if (!process.env.SUNSHINE_APP_ID) throw new Error("SUNSHINE_APP_ID not configured");
-
     const authConfig = {
-      auth:    { username: `${process.env.ZENDESK_EMAIL}/token`, password: process.env.ZENDESK_API_TOKEN },
+      auth: {
+        username: `${process.env.ZENDESK_EMAIL}/token`,
+        password: process.env.ZENDESK_API_TOKEN,
+      },
       headers: { "Content-Type": "application/json" },
     };
 
     // Step 1: Confirmation message
-    await sendSunshineMessage(conversationId, "Perfect! Connecting you to a human agent. They'll have all your details. One moment...");
+    await sendSunshineMessage(
+      conversationId,
+      `Perfect! Connecting you to a human agent. They'll have all your details. One moment...`,
+    );
 
     // Step 2: Get Smooch user ID
     console.log(`🔍 Fetching participants for conversation ${conversationId}`);
     let smoochUserId;
     try {
-      const sunshineClient  = createSunshineClient();
+      const sunshineClient = createSunshineClient();
       const participantsRes = await sunshineClient.get(
-        `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/participants`
+        `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/participants`,
       );
       smoochUserId = participantsRes.data.participants?.[0]?.userId;
       console.log(`👤 Smooch user ID: ${smoochUserId}`);
     } catch (partErr) {
-      console.error("⚠️ Failed to fetch participants:", partErr.message);
+      console.error(`⚠️ Failed to fetch participants:`, partErr.message);
     }
 
     // Step 3: Find Zendesk WebUser
-    console.log(`🔍 Searching for Zendesk WebUser with Smooch ID: ${smoochUserId}`);
+    console.log(
+      `🔍 Searching for Zendesk WebUser with Smooch ID: ${smoochUserId}`,
+    );
     let zendeskUserId;
     if (smoochUserId) {
       try {
         const searchResponse = await axios.get(
           `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2/users/search?query=${smoochUserId}`,
-          authConfig
+          authConfig,
         );
-        if (searchResponse.data.users?.length > 0) {
+        if (searchResponse.data.users && searchResponse.data.users.length > 0) {
           zendeskUserId = searchResponse.data.users[0].id;
           console.log(`✅ Found Zendesk WebUser ID: ${zendeskUserId}`);
         }
       } catch (searchErr) {
-        console.error("⚠️ Failed to search for Zendesk WebUser:", searchErr.response?.data || searchErr.message);
+        console.error(
+          `⚠️ Failed to search for Zendesk WebUser:`,
+          searchErr.response?.data || searchErr.message,
+        );
       }
     }
 
-    // Step 4: Update or merge Zendesk user with real customer details
+    // Step 4: Update or Merge user
     if (zendeskUserId) {
-      console.log(`📝 Attempting to update user ${zendeskUserId} → ${customerName} (${customerEmail})`);
+      console.log(
+        `📝 Attempting to update user ${zendeskUserId} → ${customerName} (${customerEmail})`,
+      );
       try {
         await axios.put(
           `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2/users/${zendeskUserId}.json`,
           { user: { name: customerName, email: customerEmail } },
-          authConfig
+          authConfig,
         );
-        console.log(`✅ Successfully updated user ${zendeskUserId} with email: ${customerEmail}`);
+        console.log(
+          `✅ Successfully updated user ${zendeskUserId} with email: ${customerEmail}`,
+        );
       } catch (updateErr) {
-        if (updateErr.response?.status === 422) {
-          console.log(`⚠️ Email ${customerEmail} already taken — searching for existing user to merge...`);
+        const status = updateErr.response?.status;
+        if (status === 422) {
+          console.log(
+            `⚠️ Email ${customerEmail} already taken — searching for existing user to merge...`,
+          );
           try {
             const existingUserRes = await axios.get(
               `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2/users/search?query=email:${customerEmail}`,
-              authConfig
+              authConfig,
             );
             const existingUser = existingUserRes.data.users?.[0];
 
             if (existingUser && existingUser.id !== zendeskUserId) {
-              console.log(`🔀 Merging temp WebUser ${zendeskUserId} into real user ${existingUser.id}`);
+              console.log(
+                `🔀 Merging temp WebUser ${zendeskUserId} into real user ${existingUser.id}`,
+              );
               await axios.put(
                 `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2/users/${existingUser.id}/merge.json`,
                 { user: { id: zendeskUserId } },
-                authConfig
+                authConfig,
               );
               zendeskUserId = existingUser.id;
-              console.log(`✅ Merge successful — real user ID: ${zendeskUserId}`);
-            } else if (existingUser?.id === zendeskUserId) {
+              console.log(
+                `✅ Merge successful — using real user ID: ${zendeskUserId}`,
+              );
+            } else if (existingUser && existingUser.id === zendeskUserId) {
               await axios.put(
                 `https://${process.env.ZENDESK_DOMAIN}.zendesk.com/api/v2/users/${zendeskUserId}.json`,
                 { user: { name: customerName } },
-                authConfig
+                authConfig,
               );
-              console.log(`✅ Same user found — updated name to: ${customerName}`);
+              console.log(
+                `✅ Same user found — updated name to: ${customerName}`,
+              );
             } else {
-              console.error(`❌ No existing user found for email: ${customerEmail}`);
+              console.error(
+                `❌ No existing user found for email: ${customerEmail}`,
+              );
             }
           } catch (mergeErr) {
-            console.error("❌ Merge failed:", mergeErr.response?.data || mergeErr.message);
+            console.error(
+              `❌ Merge failed:`,
+              mergeErr.response?.data || mergeErr.message,
+            );
           }
         } else {
-          console.error(`❌ Failed to update user (status=${updateErr.response?.status}):`, updateErr.response?.data || updateErr.message);
+          console.error(
+            `❌ Failed to update user (status=${status}):`,
+            updateErr.response?.data || updateErr.message,
+          );
         }
       }
     } else {
-      console.warn("⚠️ No Zendesk WebUser found — skipping user update/merge");
+      console.warn(`⚠️ No Zendesk WebUser found — skipping user update/merge`);
     }
 
     // Step 5: Pass control to agent workspace
-    console.log("🔄 Passing control to agent workspace...");
+    console.log(`🔄 Passing control to agent workspace...`);
     const sunshineClient = createSunshineClient();
-    const response       = await sunshineClient.post(
+    const response = await sunshineClient.post(
       `/apps/${process.env.SUNSHINE_APP_ID}/conversations/${conversationId}/passControl`,
-      { switchboardIntegration: "zd-agentWorkspace", metadata: { reason: "user_requested_agent" } }
+      {
+        switchboardIntegration: "zd-agentWorkspace",
+        metadata: { reason: "user_requested_agent" },
+      },
     );
 
-    console.log(`✅ Escalated conversation ${conversationId} to agent workspace`);
+    console.log(
+      `✅ Escalated conversation ${conversationId} to agent workspace`,
+    );
     return response.data;
-
   } catch (err) {
-    console.error(`❌ Escalation error (status=${err.response?.status}):`, JSON.stringify(err.response?.data));
+    const status = err.response?.status;
+    const body = err.response?.data;
+    console.error(
+      `❌ Escalation error (status=${status}):`,
+      JSON.stringify(body),
+    );
     throw err;
   }
 }
 
-// ============================================================================
-// ESCALATION MESSAGE
-// ============================================================================
-
 async function sendEscalationMessage(conversationId, customerName) {
   try {
-    await sendSunshineMessage(
-      conversationId,
-      "I'm connecting you with one of our support agents. They'll be with you shortly. Thank you for your patience! 👋"
-    );
+    const message = `I'm connecting you with one of our support agents. They'll be with you shortly to assist you further. Thank you for your patience! 👋`;
+    await sendSunshineMessage(conversationId, message);
   } catch (err) {
     console.error("Failed to send escalation message:", err.message);
   }
